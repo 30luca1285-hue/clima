@@ -192,6 +192,10 @@
     <div class="card-title">Pioggia mensile (mm)</div>
     <div class="chart-wrap h260"><canvas id="c-anno-rain"></canvas></div>
   </div>
+  <div class="card">
+    <div class="card-title">Punto di rugiada mensile (°C)</div>
+    <div class="chart-wrap h260"><canvas id="c-anno-rd"></canvas></div>
+  </div>
 </div>
 
 <!-- ══ GIORNALIERO ══════════════════════════════════════════ -->
@@ -350,7 +354,7 @@ function renderRainYrChart(anni) {
 }
 
 function renderAnnualTable(anni) {
-  const hd = ['Anno','T.min °C','T.med °C','T.max °C','U.min %','U.med %','U.max %','Pioggia mm'];
+  const hd = ['Anno','T.min °C','T.med °C','T.max °C','U.min %','U.med %','U.max %','Pioggia mm','RD.med °C'];
   let html = '<tr>' + hd.map(h=>`<th>${h}</th>`).join('') + '</tr>';
   [...anni].reverse().forEach(yr => {
     const vals = D.mensile[yr];
@@ -364,6 +368,8 @@ function renderAnnualTable(anni) {
     const hMax  = Math.max(...allM.map(m=>m.hMax));
     const hMed  = allM.reduce((s,m)=>s+m.hMedia,0)/allM.length;
     const pio   = allM.reduce((s,m)=>s+(m.pioggia||0),0);
+    const rdM   = allM.filter(m=>m.rdMedia!==null);
+    const rdMed = rdM.length ? rdM.reduce((s,m)=>s+m.rdMedia,0)/rdM.length : null;
     const hasLive = Object.values(vals).some(m=>m.fonte==='live');
     html += `<tr>
       <td>${yr}${hasLive?' <small style="color:var(--green)">⟳</small>':''}</td>
@@ -372,6 +378,7 @@ function renderAnnualTable(anni) {
       <td class="td-hot">${f(tMax)}</td>
       <td>${f(hMin)}</td><td>${f(hMed)}</td><td>${f(hMax)}</td>
       <td class="td-rain">${pio>0?pio.toFixed(0):'—'}</td>
+      <td style="color:var(--purple)">${rdMed!==null?rdMed.toFixed(1):'—'}</td>
     </tr>`;
   });
   document.getElementById('tbl-annual').innerHTML = html;
@@ -435,6 +442,19 @@ function renderAnno() {
     ...CHART_DEFAULTS,
     plugins:{ legend:{display:false} },
     scales:{ x:AXIS.x(), y:AXIS.y(' mm') },
+  });
+
+  // Punto di rugiada
+  const rdMin  = MESI_F.map((_,i) => m[i]?m[i].rdMin :null);
+  const rdMed  = MESI_F.map((_,i) => m[i]?m[i].rdMedia:null);
+  const rdMax  = MESI_F.map((_,i) => m[i]?m[i].rdMax :null);
+  mkChart('c-anno-rd','line',{ labels:MESI_F, datasets:[
+    { label:'RD.max',   data:rdMax, borderColor:'#a855f760', backgroundColor:'#a855f712', fill:'+1', borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
+    { label:'RD.media', data:rdMed, borderColor:'#a855f7',   backgroundColor:'transparent', fill:false, borderWidth:2.5, pointRadius:4, pointBackgroundColor:'#a855f7', tension:0.3, spanGaps:true },
+    { label:'RD.min',   data:rdMin, borderColor:'#a855f760', fill:false, borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
+  ]},{
+    ...CHART_DEFAULTS,
+    scales:{ x:AXIS.x(), y:AXIS.y('°') },
   });
 }
 
