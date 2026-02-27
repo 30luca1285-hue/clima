@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🌡️ Stazione Meteo</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:      #0f172a;
+      --card:    #1e293b;
+      --border:  #334155;
+      --text:    #f1f5f9;
+      --muted:   #94a3b8;
+      --accent:  #3b82f6;
+      --hot:     #ef4444;
+      --cold:    #60a5fa;
+      --green:   #22c55e;
+      --orange:  #f97316;
+      --purple:  #a855f7;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
+
+    /* ── HEADER ── */
+    .header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      flex-wrap: wrap;
+    }
+    .header-title { font-size: 1rem; font-weight: 700; color: var(--accent); }
+    .live-block { display: flex; align-items: baseline; gap: 12px; }
+    .live-temp { font-size: 2.8rem; font-weight: 800; line-height: 1; }
+    .live-hum  { font-size: 1.4rem; font-weight: 600; color: var(--cold); }
+    .live-meta { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+    .header-spacer { flex: 1; }
+    .update-badge { font-size: 0.72rem; color: var(--muted); text-align: right; }
+
+    /* ── NAV ── */
+    .nav {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 4px;
+      padding: 10px 24px;
+      overflow-x: auto;
+    }
+    .nav button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 7px 20px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      white-space: nowrap;
+      transition: all .15s;
+    }
+    .nav button.active, .nav button:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* ── SECTIONS ── */
+    .section { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .section.active { display: block; }
+
+    /* ── CARD ── */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .card-title { font-size: 0.75rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 14px; }
+
+    /* ── CHART ── */
+    .chart-wrap { position: relative; }
+    .chart-wrap.h260 { height: 260px; }
+    .chart-wrap.h340 { height: 340px; }
+    .chart-wrap.h420 { height: 420px; }
+
+    /* ── STATS GRID ── */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 10px; text-align: center; }
+    .stat-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+    .stat-val { font-size: 1.6rem; font-weight: 800; }
+    .hot   { color: var(--hot); }
+    .cold  { color: var(--cold); }
+    .green { color: var(--green); }
+    .orange { color: var(--orange); }
+
+    /* ── SELECTORS ── */
+    .selector { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .sel-btn {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 6px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      transition: all .15s;
+    }
+    .sel-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+    /* ── YEAR TABLE (panoramica) ── */
+    .yr-table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th { background: #0f172a; color: var(--muted); font-weight: 600; padding: 8px 10px; text-align: right; white-space: nowrap; }
+    th:first-child { text-align: left; }
+    td { padding: 7px 10px; text-align: right; border-top: 1px solid #1e293b; }
+    td:first-child { text-align: left; font-weight: 600; color: var(--muted); }
+    tr:hover td { background: #1e293b80; }
+    .td-hot  { color: var(--hot);   font-weight: 700; }
+    .td-cold { color: var(--cold);  font-weight: 700; }
+    .td-live { color: var(--green); font-style: italic; }
+    .td-rain { color: var(--cold); }
+
+    /* ── LOADING ── */
+    .loading { text-align: center; padding: 80px; color: var(--muted); }
+    .loading-spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── EMPTY STATE ── */
+    .empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 0.9rem; }
+
+    @media (max-width: 600px) {
+      .header { padding: 12px 16px; gap: 16px; }
+      .live-temp { font-size: 2rem; }
+      .section { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══ HEADER ══════════════════════════════════════════════════ -->
+<div class="header">
+  <div>
+    <div class="header-title">🌡️ Stazione Meteo</div>
+    <div class="live-meta" id="hdr-location">caricamento...</div>
+  </div>
+  <div class="live-block">
+    <div class="live-temp" id="hdr-t">—</div>
+    <div>
+      <div class="live-hum" id="hdr-h">— %</div>
+      <div class="live-meta" id="hdr-ts"></div>
+    </div>
+  </div>
+  <div class="header-spacer"></div>
+  <div class="update-badge" id="hdr-update"></div>
+</div>
+
+<!-- ══ NAV ════════════════════════════════════════════════════ -->
+<div class="nav">
+  <button class="active" onclick="nav('panoramica',this)">Panoramica</button>
+  <button onclick="nav('anno',this)">Per Anno</button>
+  <button onclick="nav('giornaliero',this)">Giornaliero</button>
+</div>
+
+<!-- ══ LOADING ════════════════════════════════════════════════ -->
+<div id="loading" class="loading">
+  <div class="loading-spinner"></div>
+  Caricamento dati...
+</div>
+
+<!-- ══ PANORAMICA ════════════════════════════════════════════ -->
+<div id="s-panoramica" class="section">
+  <div class="stats-grid" id="stats-grid"></div>
+  <div class="card">
+    <div class="card-title">Temperatura media mensile — tutti gli anni</div>
+    <div class="chart-wrap h420"><canvas id="c-overview"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Pioggia totale annuale (mm)</div>
+    <div class="chart-wrap h260"><canvas id="c-rain-yr"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Tabella riepilogativa — medie annuali</div>
+    <div class="yr-table-wrap"><table id="tbl-annual"></table></div>
+  </div>
+</div>
+
+<!-- ══ PER ANNO ══════════════════════════════════════════════ -->
+<div id="s-anno" class="section">
+  <div class="selector" id="year-sel"></div>
+  <div class="card">
+    <div class="card-title">Temperatura mensile — <span id="yr-label">—</span></div>
+    <div class="chart-wrap h420"><canvas id="c-anno-temp"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Umidità mensile</div>
+    <div class="chart-wrap h260"><canvas id="c-anno-hum"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Pioggia mensile (mm)</div>
+    <div class="chart-wrap h260"><canvas id="c-anno-rain"></canvas></div>
+  </div>
+</div>
+
+<!-- ══ GIORNALIERO ══════════════════════════════════════════ -->
+<div id="s-giornaliero" class="section">
+  <div class="selector" id="range-sel">
+    <button class="sel-btn active" onclick="setRange(30,this)">Ultimi 30 gg</button>
+    <button class="sel-btn" onclick="setRange(90,this)">90 giorni</button>
+    <button class="sel-btn" onclick="setRange(180,this)">6 mesi</button>
+    <button class="sel-btn" onclick="setRange(9999,this)">Tutto</button>
+  </div>
+  <div id="daily-empty" class="empty" style="display:none">
+    Nessun dato giornaliero ancora — i dati si accumulano dal momento in cui il trigger è attivo.
+  </div>
+  <div id="daily-charts">
+    <div class="card">
+      <div class="card-title">Temperatura giornaliera Min / Media / Max</div>
+      <div class="chart-wrap h420"><canvas id="c-daily-temp"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Umidità giornaliera Min / Media / Max</div>
+      <div class="chart-wrap h260"><canvas id="c-daily-hum"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ╔══════════════════════════════════════════════════════════╗
+// ║  CONFIG — inserisci l'URL del tuo Apps Script web app   ║
+// ╚══════════════════════════════════════════════════════════╝
+const API = 'https://script.google.com/macros/s/AKfycbzl8r8hzoZMs0n0gslLyIdYRN0Q3oF7CnjSqsIuFlycqSquisPJmsyoUQ8QFBzPQFYF/exec';
+
+// ── COSTANTI ────────────────────────────────────────────────
+const MESI  = ['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
+const MESI_F= ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno',
+               'Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
+const PALETTE = ['#3b82f6','#22c55e','#f97316','#ef4444','#a855f7','#06b6d4','#eab308','#ec4899'];
+const CHART_DEFAULTS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: 'index', intersect: false },
+  plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 16, font: { size: 11 } } } },
+};
+const AXIS = {
+  x: (extra={}) => ({ ticks: { color: '#94a3b8', ...extra.xticks }, grid: { color: '#334155' }, ...extra.x }),
+  y: (sfx='', extra={}) => ({ ticks: { color: '#94a3b8', callback: v => v + sfx, ...extra.yticks }, grid: { color: '#334155' }, ...extra.y }),
+};
+
+let D = null;        // dati globali
+let CY = null;       // anno selezionato
+let CR = 30;         // range giorni
+let charts = {};
+
+// ── FETCH ────────────────────────────────────────────────────
+async function load() {
+  try {
+    const res = await fetch(API + '?action=getData');
+    D = await res.json();
+    init();
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      '<p style="color:#ef4444">Errore caricamento dati:<br>' + e.message + '</p>';
+  }
+}
+
+function init() {
+  document.getElementById('loading').style.display = 'none';
+  document.querySelectorAll('.section').forEach(s => s.style.display = '');
+
+  // Header
+  if (D.attuale) {
+    const t = D.attuale.t, h = D.attuale.h, ts = new Date(D.attuale.ts);
+    document.getElementById('hdr-t').textContent  = t.toFixed(1) + ' °C';
+    document.getElementById('hdr-h').textContent  = h.toFixed(0) + ' %';
+    document.getElementById('hdr-ts').textContent = ts.toLocaleString('it-IT');
+    // colore temp
+    document.getElementById('hdr-t').style.color =
+      t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
+  }
+  document.getElementById('hdr-update').textContent =
+    'Aggiornato: ' + new Date(D.aggiornato).toLocaleTimeString('it-IT');
+
+  renderPanoramica();
+  buildYearSelector();
+  renderAnno();
+  renderGiornaliero();
+}
+
+// ══════════════════════════════════════════════════════════════
+// PANORAMICA
+// ══════════════════════════════════════════════════════════════
+function renderPanoramica() {
+  const anni = anniSorted();
+  renderStatsGrid(anni);
+  renderOverviewChart(anni);
+  renderRainYrChart(anni);
+  renderAnnualTable(anni);
+}
+
+function anniSorted() {
+  return Object.keys(D.mensile).map(Number).sort((a,b) => a - b);
+}
+
+function renderStatsGrid(anni) {
+  let allTMin=[], allTMax=[], allTMed=[], allPio=[];
+  anni.forEach(yr => {
+    Object.values(D.mensile[yr]).forEach(m => {
+      if (m.tMin   !== null) allTMin.push(m.tMin);
+      if (m.tMax   !== null) allTMax.push(m.tMax);
+      if (m.tMedia !== null) allTMed.push(m.tMedia);
+      if (m.pioggia!== null) allPio.push(m.pioggia);
+    });
+  });
+  const avg = a => a.reduce((s,v)=>s+v,0)/a.length;
+  const stats = [
+    { label:'Minima assoluta',  val: Math.min(...allTMin).toFixed(1)+'°C', cls:'cold'   },
+    { label:'Massima assoluta', val: Math.max(...allTMax).toFixed(1)+'°C', cls:'hot'    },
+    { label:'Media generale',   val: avg(allTMed).toFixed(1)+'°C',         cls:'green'  },
+    { label:'Anni di dati',     val: anni.length,                           cls:'orange' },
+    ...(allPio.length ? [{ label:'Pioggia tot.', val: allPio.reduce((a,b)=>a+b,0).toFixed(0)+' mm', cls:'cold' }] : []),
+    ...(D.giornaliero.length ? [{ label:'Giorni live', val: D.giornaliero.length, cls:'' }] : []),
+  ];
+  document.getElementById('stats-grid').innerHTML = stats.map(s =>
+    `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-val ${s.cls}">${s.val}</div></div>`
+  ).join('');
+}
+
+function renderOverviewChart(anni) {
+  const datasets = anni.map((yr,i) => ({
+    label: String(yr),
+    data: MESI.map((_,m) => { const s=D.mensile[yr][m]; return s&&s.tMedia!==null?s.tMedia:null; }),
+    borderColor: PALETTE[i%PALETTE.length],
+    backgroundColor: PALETTE[i%PALETTE.length]+'25',
+    borderWidth: yr===new Date().getFullYear() ? 3 : 1.8,
+    pointRadius: 3, tension: 0.35, spanGaps: true,
+  }));
+  mkChart('c-overview','line',{ labels: MESI, datasets },{
+    ...CHART_DEFAULTS,
+    scales: { x: AXIS.x(), y: AXIS.y('°') },
+  });
+}
+
+function renderRainYrChart(anni) {
+  const totals = anni.map(yr =>
+    Object.values(D.mensile[yr]).reduce((s,m) => s + (m.pioggia||0), 0)
+  );
+  if (totals.every(v=>v===0)) return;
+  mkChart('c-rain-yr','bar',{
+    labels: anni.map(String),
+    datasets:[{ label:'Pioggia mm', data:totals,
+      backgroundColor:'#60a5fa55', borderColor:'#60a5fa', borderWidth:1.5, borderRadius:5 }],
+  },{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{display:false} },
+    scales:{ x:AXIS.x(), y:AXIS.y(' mm') },
+  });
+}
+
+function renderAnnualTable(anni) {
+  const hd = ['Anno','T.min °C','T.med °C','T.max °C','U.min %','U.med %','U.max %','Pioggia mm'];
+  let html = '<tr>' + hd.map(h=>`<th>${h}</th>`).join('') + '</tr>';
+  [...anni].reverse().forEach(yr => {
+    const vals = D.mensile[yr];
+    const allM = Object.values(vals).filter(m=>m.tMin!==null);
+    if (!allM.length) return;
+    const f = v => v!==null ? (typeof v==='number'?v.toFixed(1):'—') : '—';
+    const tMin  = Math.min(...allM.map(m=>m.tMin));
+    const tMax  = Math.max(...allM.map(m=>m.tMax));
+    const tMed  = allM.reduce((s,m)=>s+m.tMedia,0)/allM.length;
+    const hMin  = Math.min(...allM.map(m=>m.hMin));
+    const hMax  = Math.max(...allM.map(m=>m.hMax));
+    const hMed  = allM.reduce((s,m)=>s+m.hMedia,0)/allM.length;
+    const pio   = allM.reduce((s,m)=>s+(m.pioggia||0),0);
+    const hasLive = Object.values(vals).some(m=>m.fonte==='live');
+    html += `<tr>
+      <td>${yr}${hasLive?' <small style="color:var(--green)">⟳</small>':''}</td>
+      <td class="td-cold">${f(tMin)}</td>
+      <td>${f(tMed)}</td>
+      <td class="td-hot">${f(tMax)}</td>
+      <td>${f(hMin)}</td><td>${f(hMed)}</td><td>${f(hMax)}</td>
+      <td class="td-rain">${pio>0?pio.toFixed(0):'—'}</td>
+    </tr>`;
+  });
+  document.getElementById('tbl-annual').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+// PER ANNO
+// ══════════════════════════════════════════════════════════════
+function buildYearSelector() {
+  const anni = anniSorted().reverse();
+  CY = anni[0];
+  const el = document.getElementById('year-sel');
+  el.innerHTML = anni.map((yr,i) =>
+    `<button class="sel-btn${i===0?' active':''}" onclick="selectYear(${yr},this)">${yr}</button>`
+  ).join('');
+}
+
+function selectYear(yr, btn) {
+  CY = yr;
+  document.querySelectorAll('#year-sel .sel-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderAnno();
+}
+
+function renderAnno() {
+  const yr = CY, m = D.mensile[yr]||{};
+  document.getElementById('yr-label').textContent = yr;
+
+  const tMin  = MESI_F.map((_,i) => m[i]?m[i].tMin  :null);
+  const tMed  = MESI_F.map((_,i) => m[i]?m[i].tMedia:null);
+  const tMax  = MESI_F.map((_,i) => m[i]?m[i].tMax  :null);
+  const hMin  = MESI_F.map((_,i) => m[i]?m[i].hMin  :null);
+  const hMed  = MESI_F.map((_,i) => m[i]?m[i].hMedia:null);
+  const hMax  = MESI_F.map((_,i) => m[i]?m[i].hMax  :null);
+  const pio   = MESI_F.map((_,i) => m[i]&&m[i].pioggia!==null?m[i].pioggia:0);
+
+  // Temperatura: barre min+max + linea media
+  mkChart('c-anno-temp','bar',{ labels:MESI_F, datasets:[
+    { label:'T.min', data:tMin, backgroundColor:'#60a5fa50', borderColor:'#60a5fa', borderWidth:1.5, borderRadius:4, order:2 },
+    { label:'T.media', data:tMed, type:'line', borderColor:'#f97316', backgroundColor:'transparent', borderWidth:2.5, pointRadius:5, pointBackgroundColor:'#f97316', tension:0.3, spanGaps:true, order:1 },
+    { label:'T.max', data:tMax, backgroundColor:'#ef444450', borderColor:'#ef4444', borderWidth:1.5, borderRadius:4, order:2 },
+  ]},{
+    ...CHART_DEFAULTS,
+    scales: { x:AXIS.x(), y:AXIS.y('°') },
+  });
+
+  // Umidità
+  mkChart('c-anno-hum','line',{ labels:MESI_F, datasets:[
+    { label:'U.max',   data:hMax, borderColor:'#94a3b870', fill:'+1', borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
+    { label:'U.media', data:hMed, borderColor:'#22c55e', backgroundColor:'#22c55e18', fill:false, borderWidth:2.5, pointRadius:4, tension:0.3, spanGaps:true },
+    { label:'U.min',   data:hMin, borderColor:'#94a3b870', fill:false, borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
+  ]},{
+    ...CHART_DEFAULTS,
+    scales:{ x:AXIS.x(), y:AXIS.y('%',{y:{min:0,max:100}}) },
+  });
+
+  // Pioggia
+  mkChart('c-anno-rain','bar',{ labels:MESI_F, datasets:[
+    { label:'Pioggia mm', data:pio, backgroundColor:'#60a5fa55', borderColor:'#60a5fa', borderWidth:1.5, borderRadius:5 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{display:false} },
+    scales:{ x:AXIS.x(), y:AXIS.y(' mm') },
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// GIORNALIERO
+// ══════════════════════════════════════════════════════════════
+function setRange(days, btn) {
+  CR = days;
+  document.querySelectorAll('#range-sel .sel-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderGiornaliero();
+}
+
+function renderGiornaliero() {
+  if (!D.giornaliero.length) {
+    document.getElementById('daily-empty').style.display = '';
+    document.getElementById('daily-charts').style.display = 'none';
+    return;
+  }
+  document.getElementById('daily-empty').style.display = 'none';
+  document.getElementById('daily-charts').style.display = '';
+
+  let data = D.giornaliero;
+  if (CR < 9999) {
+    const cut = new Date(); cut.setDate(cut.getDate() - CR);
+    const cutStr = cut.toISOString().slice(0,10);
+    data = data.filter(d => d.data >= cutStr);
+  }
+
+  const labels = data.map(d => {
+    const [y,m,dd] = d.data.split('-');
+    return dd + '/' + m;
+  });
+
+  // Temperatura
+  mkChart('c-daily-temp','line',{ labels, datasets:[
+    { label:'T.max',   data:data.map(d=>d.tMax),   borderColor:'#ef444490', backgroundColor:'#ef444415', fill:'+1', tension:0.3, pointRadius:0, borderWidth:1.5 },
+    { label:'T.media', data:data.map(d=>d.tMedia), borderColor:'#f97316',   backgroundColor:'transparent', fill:false, tension:0.3, pointRadius:0, borderWidth:2.5 },
+    { label:'T.min',   data:data.map(d=>d.tMin),   borderColor:'#60a5fa90', backgroundColor:'#60a5fa15', fill:false, tension:0.3, pointRadius:0, borderWidth:1.5 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{
+      legend:{ labels:{ color:'#94a3b8' } },
+      tooltip:{ callbacks:{ label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C' } },
+    },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
+  });
+
+  // Umidità
+  mkChart('c-daily-hum','line',{ labels, datasets:[
+    { label:'U.max',   data:data.map(d=>d.hMax),   borderColor:'#94a3b860', backgroundColor:'#22c55e10', fill:'+1', tension:0.3, pointRadius:0, borderWidth:1 },
+    { label:'U.media', data:data.map(d=>d.hMedia), borderColor:'#22c55e',   fill:false, tension:0.3, pointRadius:0, borderWidth:2.5 },
+    { label:'U.min',   data:data.map(d=>d.hMin),   borderColor:'#94a3b860', fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{ labels:{ color:'#94a3b8' } } },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// UTILITY
+// ══════════════════════════════════════════════════════════════
+function mkChart(id, type, data, options) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), { type, data, options });
+}
+
+function nav(name, btn) {
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('s-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── START ─────────────────────────────────────────────────────
+load();
+</script>
+</body>
+</html>
