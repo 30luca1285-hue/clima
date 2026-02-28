@@ -130,9 +130,9 @@ function serveJsonData() {
   let raw         = [];
 
   if (dataSheet && dataSheet.getLastRow() > 1) {
-    raw = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 3).getValues()
+    raw = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 4).getValues()
       .filter(r => r[0] instanceof Date && r[1] !== '' && !isNaN(parseFloat(r[1])))
-      .map(r => ({ ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]) }));
+      .map(r => ({ ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: parseFloat(r[3]) || 0 }));
 
     if (raw.length) {
       attuale = raw[raw.length - 1];
@@ -157,10 +157,12 @@ function serveJsonData() {
           const alpha = (a * r.t / (b + r.t)) + Math.log(r.h / 100);
           return b * alpha / (a - alpha);
         });
+        const pios  = recs.map(r => r.p || 0);
         const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
         return { data, tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
                        hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
-                       rdMin: Math.min(...dps),  rdMedia: avg(dps),  rdMax: Math.max(...dps) };
+                       rdMin: Math.min(...dps),  rdMedia: avg(dps),  rdMax: Math.max(...dps),
+                       pioggia: pios.reduce((a, b) => a + b, 0) };
       });
 
       // Integra mese corrente in mensile se non già presente in Foglio 1
@@ -353,6 +355,11 @@ function fetchAndSaveData() {
     const temp      = dash.Temperature;
     const hum       = dash.Humidity;
 
+    // Pioggia da NAModule3 (rain gauge) — 0 se non presente o offline
+    const rainMod = device.modules.find(m => m.type === 'NAModule3');
+    const rain    = (rainMod && rainMod.dashboard_data && rainMod.dashboard_data.Rain != null)
+                    ? rainMod.dashboard_data.Rain : 0;
+
     const ss    = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = getOrCreateDataSheet(ss);
 
@@ -366,7 +373,7 @@ function fetchAndSaveData() {
       }
     }
 
-    sheet.appendRow([timestamp, temp, hum]);
+    sheet.appendRow([timestamp, temp, hum, rain]);
     Logger.log('Salvato: ' + timestamp.toLocaleString('it-IT') + ' — ' + temp + '°C — ' + hum + '%');
 
     updateDashboard();
@@ -734,15 +741,17 @@ function getOrCreateDataSheet(ss) {
   let sheet = ss.getSheetByName(CFG.DATA_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(CFG.DATA_SHEET);
-    sheet.getRange(1, 1, 1, 3)
-      .setValues([['Data/Ora', 'Temperatura (°C)', 'Umidità (%)']])
+    sheet.getRange(1, 1, 1, 4)
+      .setValues([['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)']])
       .setFontWeight('bold').setBackground('#e8eaf6');
     sheet.setColumnWidth(1, 180);
     sheet.setColumnWidth(2, 140);
     sheet.setColumnWidth(3, 120);
+    sheet.setColumnWidth(4, 120);
     sheet.getRange('A2:A').setNumberFormat('dd/MM/yyyy HH:mm');
     sheet.getRange('B2:B').setNumberFormat('0.0');
     sheet.getRange('C2:C').setNumberFormat('0');
+    sheet.getRange('D2:D').setNumberFormat('0.0');
   }
   return sheet;
 }
