@@ -113,6 +113,11 @@
     .td-live { color: var(--green); font-style: italic; }
     .td-rain { color: var(--cold); }
 
+    /* ── SYNC DOT ── */
+    .sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    .sync-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .sync-red   { background: var(--hot);   box-shadow: 0 0 6px var(--hot); }
+
     /* ── LOADING ── */
     .loading { text-align: center; padding: 80px; color: var(--muted); }
     .loading-spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 16px; }
@@ -134,7 +139,7 @@
 <div class="header">
   <div>
     <div class="header-title">🌡️ Stazione Meteo</div>
-    <div class="live-meta" id="hdr-location">caricamento...</div>
+    <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
     <div class="live-temp" id="hdr-t">—</div>
@@ -247,6 +252,7 @@ let D = null;        // dati globali
 let CY = null;       // anno selezionato
 let CR = 30;         // range giorni
 let charts = {};
+let rendered = {};   // sezioni già renderizzate
 
 // ── FETCH ────────────────────────────────────────────────────
 async function load() {
@@ -262,7 +268,7 @@ async function load() {
 
 function init() {
   document.getElementById('loading').style.display = 'none';
-  document.querySelectorAll('.section').forEach(s => s.style.display = '');
+  document.getElementById('s-panoramica').classList.add('active');
 
   // Header
   if (D.attuale) {
@@ -270,17 +276,32 @@ function init() {
     document.getElementById('hdr-t').textContent  = t.toFixed(1) + ' °C';
     document.getElementById('hdr-h').textContent  = h.toFixed(0) + ' %';
     document.getElementById('hdr-ts').textContent = ts.toLocaleString('it-IT');
-    // colore temp
     document.getElementById('hdr-t').style.color =
       t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
   }
   document.getElementById('hdr-update').textContent =
     'Aggiornato: ' + new Date(D.aggiornato).toLocaleTimeString('it-IT');
 
-  renderPanoramica();
-  buildYearSelector();
-  renderAnno();
-  renderGiornaliero();
+  updateSyncStatus();
+  buildYearSelector();        // prepara CY e i bottoni anno
+  renderPanoramica();         // sezione già visibile → dimensioni corrette
+  rendered['panoramica'] = true;
+}
+
+function updateSyncStatus() {
+  const el  = document.getElementById('hdr-sync');
+  const dot = document.getElementById('sync-dot');
+  const txt = document.getElementById('sync-text');
+  el.style.display = '';
+  if (!D.attuale) {
+    dot.className   = 'sync-dot sync-red';
+    txt.textContent = 'Nessun dato live';
+    return;
+  }
+  const ageMin = (Date.now() - new Date(D.attuale.ts).getTime()) / 60000;
+  const ok = ageMin < 35;
+  dot.className   = 'sync-dot ' + (ok ? 'sync-green' : 'sync-red');
+  txt.textContent = ok ? 'Sincronizzato' : 'Non sincronizzato';
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -470,11 +491,13 @@ function setRange(days, btn) {
 
 function renderGiornaliero() {
   if (!D.giornaliero.length) {
+    document.getElementById('range-sel').style.display   = 'none';
     document.getElementById('daily-empty').style.display = '';
     document.getElementById('daily-charts').style.display = 'none';
     return;
   }
-  document.getElementById('daily-empty').style.display = 'none';
+  document.getElementById('range-sel').style.display    = '';
+  document.getElementById('daily-empty').style.display  = 'none';
   document.getElementById('daily-charts').style.display = '';
 
   let data = D.giornaliero;
@@ -528,6 +551,12 @@ function nav(name, btn) {
   document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
   document.getElementById('s-'+name).classList.add('active');
   btn.classList.add('active');
+  // render lazy: solo la prima volta che la sezione diventa visibile
+  if (!rendered[name]) {
+    if (name === 'anno')        renderAnno();
+    else if (name === 'giornaliero') renderGiornaliero();
+    rendered[name] = true;
+  }
 }
 
 // ── START ─────────────────────────────────────────────────────
