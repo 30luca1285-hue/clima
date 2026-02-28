@@ -130,8 +130,9 @@ function serveJsonData() {
   let raw         = [];
 
   if (dataSheet && dataSheet.getLastRow() > 1) {
+    const cutoff30d = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
     raw = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 4).getValues()
-      .filter(r => r[0] instanceof Date && r[1] !== '' && !isNaN(parseFloat(r[1])))
+      .filter(r => r[0] instanceof Date && r[0] >= cutoff30d && r[1] !== '' && !isNaN(parseFloat(r[1])))
       .map(r => ({ ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: parseFloat(r[3]) || 0 }));
 
     if (raw.length) {
