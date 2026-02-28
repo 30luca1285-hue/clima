@@ -147,7 +147,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v09</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v10</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -166,7 +166,6 @@
   <button class="active" onclick="nav('panoramica',this)">Panoramica</button>
   <button onclick="nav('anno',this)">Per Anno</button>
   <button onclick="nav('periodo',this)">Periodo</button>
-  <button onclick="nav('giornaliero',this)">Giornaliero</button>
 </div>
 
 <!-- ══ LOADING ════════════════════════════════════════════════ -->
@@ -248,30 +247,6 @@
   </div>
 </div>
 
-<!-- ══ GIORNALIERO ══════════════════════════════════════════ -->
-<div id="s-giornaliero" class="section">
-  <div id="daily-empty" class="empty" style="display:none">
-    Nessun dato giornaliero ancora — i dati si accumulano dal momento in cui il trigger è attivo.
-  </div>
-  <div id="daily-charts">
-    <div class="card">
-      <div class="card-title">Temperatura — ultime 24h (°C)</div>
-      <div class="chart-wrap h340"><canvas id="c-daily-temp"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Umidità — ultime 24h (%)</div>
-      <div class="chart-wrap h260"><canvas id="c-daily-hum"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Punto di rugiada — ultime 24h (°C)</div>
-      <div class="chart-wrap h260"><canvas id="c-daily-rd"></canvas></div>
-    </div>
-    <div class="card" id="daily-rain-card" style="display:none">
-      <div class="card-title">Pioggia — ultime 24h (mm)</div>
-      <div class="chart-wrap h260"><canvas id="c-daily-rain"></canvas></div>
-    </div>
-  </div>
-</div>
 
 <script>
 // ╔══════════════════════════════════════════════════════════╗
@@ -611,58 +586,6 @@ function renderPeriodo() {
   });
 }
 
-// ══════════════════════════════════════════════════════════════
-// GIORNALIERO — raw ogni 30 min, ultime 24h
-// ══════════════════════════════════════════════════════════════
-function renderGiornaliero() {
-  const cutMs = Date.now() - 24 * 3600 * 1000;
-  const data  = (D.raw || []).filter(r => r.ts >= cutMs);
-  const empty  = document.getElementById('daily-empty');
-  const charts = document.getElementById('daily-charts');
-  if (!data.length) { empty.style.display = ''; charts.style.display = 'none'; return; }
-  empty.style.display = 'none'; charts.style.display = '';
-
-  const labels = data.map(r => {
-    const d  = new Date(r.ts);
-    const HH = String(d.getHours()).padStart(2,'0');
-    const MM = String(d.getMinutes()).padStart(2,'0');
-    return HH + ':' + MM;
-  });
-
-  mkChart('c-daily-temp','line',{ labels, datasets:[
-    { label:'Temperatura °C', data:data.map(r=>r.t),
-      borderColor:'#f97316', backgroundColor:'#f9731618',
-      fill:true, tension:0.2, pointRadius:0, borderWidth:2 },
-  ]},{
-    ...CHART_DEFAULTS,
-    plugins:{ legend:{labels:{color:'#94a3b8'}},
-      tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:12}}), y:AXIS.y('°') },
-  });
-
-  mkChart('c-daily-hum','line',{ labels, datasets:[
-    { label:'Umidità %', data:data.map(r=>r.h),
-      borderColor:'#22c55e', backgroundColor:'#22c55e18',
-      fill:true, tension:0.2, pointRadius:0, borderWidth:2 },
-  ]},{
-    ...CHART_DEFAULTS,
-    plugins:{ legend:{labels:{color:'#94a3b8'}} },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:12}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
-  });
-
-  mkChart('c-daily-rd','line',{ labels, datasets:[
-    { label:'Punto di rugiada °C', data:data.map(r=>dewPt(r.t,r.h)),
-      borderColor:'#a855f7', backgroundColor:'#a855f718',
-      fill:true, tension:0.2, pointRadius:0, borderWidth:2 },
-  ]},{
-    ...CHART_DEFAULTS,
-    plugins:{ legend:{labels:{color:'#94a3b8'}},
-      tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:12}}), y:AXIS.y('°') },
-  });
-
-  document.getElementById('daily-rain-card').style.display = 'none';
-}
 
 // ══════════════════════════════════════════════════════════════
 // UTILITY
@@ -681,7 +604,6 @@ function nav(name, btn) {
   if (!rendered[name]) {
     if (name === 'anno') renderAnno();
     else if (name === 'periodo') setPeriod(3, document.querySelector('#period-presets .sel-btn[data-days="3"]'));
-    else if (name === 'giornaliero') renderGiornaliero();
     rendered[name] = true;
   }
 }
