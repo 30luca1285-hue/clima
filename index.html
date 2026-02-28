@@ -138,7 +138,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v04</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v05</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -216,11 +216,11 @@
   </div>
   <div id="daily-charts">
     <div class="card">
-      <div class="card-title">Temperatura giornaliera Min / Media / Max</div>
+      <div class="card-title">Temperatura — tutte le rilevazioni (ogni 30 min)</div>
       <div class="chart-wrap h420"><canvas id="c-daily-temp"></canvas></div>
     </div>
     <div class="card">
-      <div class="card-title">Umidità giornaliera Min / Media / Max</div>
+      <div class="card-title">Umidità — tutte le rilevazioni (ogni 30 min)</div>
       <div class="chart-wrap h260"><canvas id="c-daily-hum"></canvas></div>
     </div>
   </div>
@@ -490,9 +490,10 @@ function setRange(days, btn) {
 }
 
 function renderGiornaliero() {
-  if (!D.giornaliero.length) {
-    document.getElementById('range-sel').style.display   = 'none';
-    document.getElementById('daily-empty').style.display = '';
+  const rawAll = D.raw || [];
+  if (!rawAll.length) {
+    document.getElementById('range-sel').style.display    = 'none';
+    document.getElementById('daily-empty').style.display  = '';
     document.getElementById('daily-charts').style.display = 'none';
     return;
   }
@@ -500,41 +501,44 @@ function renderGiornaliero() {
   document.getElementById('daily-empty').style.display  = 'none';
   document.getElementById('daily-charts').style.display = '';
 
-  let data = D.giornaliero;
+  let data = rawAll;
   if (CR < 9999) {
-    const cut = new Date(); cut.setDate(cut.getDate() - CR);
-    const cutStr = cut.toISOString().slice(0,10);
-    data = data.filter(d => d.data >= cutStr);
+    const cutMs = Date.now() - CR * 24 * 3600 * 1000;
+    data = data.filter(r => r.ts >= cutMs);
   }
 
-  const labels = data.map(d => {
-    const [y,m,dd] = d.data.split('-');
-    return dd + '/' + m;
+  const labels = data.map(r => {
+    const d  = new Date(r.ts);
+    const dd = String(d.getDate()).padStart(2,'0');
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const HH = String(d.getHours()).padStart(2,'0');
+    const MM = String(d.getMinutes()).padStart(2,'0');
+    return dd+'/'+mm+' '+HH+':'+MM;
   });
 
-  // Temperatura
+  // Temperatura — linea continua su tutti i campioni
   mkChart('c-daily-temp','line',{ labels, datasets:[
-    { label:'T.max',   data:data.map(d=>d.tMax),   borderColor:'#ef444490', backgroundColor:'#ef444415', fill:'+1', tension:0.3, pointRadius:0, borderWidth:1.5 },
-    { label:'T.media', data:data.map(d=>d.tMedia), borderColor:'#f97316',   backgroundColor:'transparent', fill:false, tension:0.3, pointRadius:0, borderWidth:2.5 },
-    { label:'T.min',   data:data.map(d=>d.tMin),   borderColor:'#60a5fa90', backgroundColor:'#60a5fa15', fill:false, tension:0.3, pointRadius:0, borderWidth:1.5 },
+    { label:'Temperatura °C', data:data.map(r=>r.t),
+      borderColor:'#f97316', backgroundColor:'#f9731618',
+      fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
   ]},{
     ...CHART_DEFAULTS,
     plugins:{
       legend:{ labels:{ color:'#94a3b8' } },
       tooltip:{ callbacks:{ label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C' } },
     },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:16}}), y:AXIS.y('°') },
   });
 
-  // Umidità
+  // Umidità — linea continua su tutti i campioni
   mkChart('c-daily-hum','line',{ labels, datasets:[
-    { label:'U.max',   data:data.map(d=>d.hMax),   borderColor:'#94a3b860', backgroundColor:'#22c55e10', fill:'+1', tension:0.3, pointRadius:0, borderWidth:1 },
-    { label:'U.media', data:data.map(d=>d.hMedia), borderColor:'#22c55e',   fill:false, tension:0.3, pointRadius:0, borderWidth:2.5 },
-    { label:'U.min',   data:data.map(d=>d.hMin),   borderColor:'#94a3b860', fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
+    { label:'Umidità %', data:data.map(r=>r.h),
+      borderColor:'#22c55e', backgroundColor:'#22c55e18',
+      fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
   ]},{
     ...CHART_DEFAULTS,
     plugins:{ legend:{ labels:{ color:'#94a3b8' } } },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:16}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
   });
 }
 
