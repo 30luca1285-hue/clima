@@ -147,7 +147,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v08</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v09</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -344,9 +344,9 @@ function updateSyncStatus() {
     txt.textContent = 'Nessun dato live';
     return;
   }
-  // Trigger ogni 30 min + tolleranza Apps Script ±15 min → soglia 65 min
+  // Trigger ogni 10 min + tolleranza Apps Script ~15 min → soglia 25 min
   const ageMin = (Date.now() - new Date(D.attuale.ts).getTime()) / 60000;
-  const ok = ageMin < 65;
+  const ok = ageMin < 25;
   dot.className   = 'sync-dot ' + (ok ? 'sync-green' : 'sync-red');
   txt.textContent = ok
     ? 'Sincronizzato (' + Math.round(ageMin) + ' min fa)'

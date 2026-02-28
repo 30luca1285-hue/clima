@@ -12,7 +12,7 @@
 const CFG = {
   DATA_SHEET:      'Dati',
   DASHBOARD_SHEET: 'Dashboard',
-  INTERVAL_MIN:    30,           // minuti tra un fetch e l'altro
+  INTERVAL_MIN:    10,           // minuti tra un fetch e l'altro
 };
 
 const API = {
