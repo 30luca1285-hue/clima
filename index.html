@@ -118,6 +118,15 @@
     .sync-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .sync-red   { background: var(--hot);   box-shadow: 0 0 6px var(--hot); }
 
+    /* ── PERIOD PICKER ── */
+    .period-picker { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+    .period-inputs { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .period-label  { font-size: 0.82rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    input[type="date"] {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 12px; border-radius: 8px; font-size: 0.82rem; cursor: pointer; }
+    input[type="date"]:focus { outline: none; border-color: var(--accent); }
+
     /* ── LOADING ── */
     .loading { text-align: center; padding: 80px; color: var(--muted); }
     .loading-spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 16px; }
@@ -138,7 +147,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v05</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v06</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -156,6 +165,7 @@
 <div class="nav">
   <button class="active" onclick="nav('panoramica',this)">Panoramica</button>
   <button onclick="nav('anno',this)">Per Anno</button>
+  <button onclick="nav('periodo',this)">Periodo</button>
   <button onclick="nav('giornaliero',this)">Giornaliero</button>
 </div>
 
@@ -203,25 +213,62 @@
   </div>
 </div>
 
+<!-- ══ PERIODO ═════════════════════════════════════════════ -->
+<div id="s-periodo" class="section">
+  <div class="card" style="margin-bottom:20px">
+    <div class="period-picker">
+      <div id="period-presets" class="selector" style="margin:0">
+        <button class="sel-btn" data-days="1" onclick="setPeriod(1,this)">Oggi</button>
+        <button class="sel-btn active" data-days="3" onclick="setPeriod(3,this)">3 giorni</button>
+        <button class="sel-btn" data-days="7" onclick="setPeriod(7,this)">7 giorni</button>
+        <button class="sel-btn" data-days="30" onclick="setPeriod(30,this)">30 giorni</button>
+      </div>
+      <div class="period-inputs">
+        <label class="period-label">Da <input type="date" id="p-from" onchange="customPeriod()"></label>
+        <label class="period-label">A &nbsp;<input type="date" id="p-to"   onchange="customPeriod()"></label>
+      </div>
+    </div>
+  </div>
+  <div id="periodo-empty" class="empty" style="display:none">
+    Nessun dato nel periodo selezionato.
+  </div>
+  <div id="periodo-charts" style="display:none">
+    <div class="card">
+      <div class="card-title">Temperatura — ogni 30 min (°C)</div>
+      <div class="chart-wrap h340"><canvas id="c-periodo-temp"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Umidità — ogni 30 min (%)</div>
+      <div class="chart-wrap h260"><canvas id="c-periodo-hum"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Punto di rugiada — ogni 30 min (°C)</div>
+      <div class="chart-wrap h260"><canvas id="c-periodo-rd"></canvas></div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ GIORNALIERO ══════════════════════════════════════════ -->
 <div id="s-giornaliero" class="section">
-  <div class="selector" id="range-sel">
-    <button class="sel-btn active" onclick="setRange(30,this)">Ultimi 30 gg</button>
-    <button class="sel-btn" onclick="setRange(90,this)">90 giorni</button>
-    <button class="sel-btn" onclick="setRange(180,this)">6 mesi</button>
-    <button class="sel-btn" onclick="setRange(9999,this)">Tutto</button>
-  </div>
   <div id="daily-empty" class="empty" style="display:none">
     Nessun dato giornaliero ancora — i dati si accumulano dal momento in cui il trigger è attivo.
   </div>
   <div id="daily-charts">
     <div class="card">
-      <div class="card-title">Temperatura — tutte le rilevazioni (ogni 30 min)</div>
+      <div class="card-title">Temperatura giornaliera Min / Media / Max (°C)</div>
       <div class="chart-wrap h420"><canvas id="c-daily-temp"></canvas></div>
     </div>
     <div class="card">
-      <div class="card-title">Umidità — tutte le rilevazioni (ogni 30 min)</div>
+      <div class="card-title">Umidità giornaliera Min / Media / Max (%)</div>
       <div class="chart-wrap h260"><canvas id="c-daily-hum"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Punto di rugiada giornaliero Min / Media / Max (°C)</div>
+      <div class="chart-wrap h260"><canvas id="c-daily-rd"></canvas></div>
+    </div>
+    <div class="card" id="daily-rain-card" style="display:none">
+      <div class="card-title">Pioggia giornaliera (mm)</div>
+      <div class="chart-wrap h260"><canvas id="c-daily-rain"></canvas></div>
     </div>
   </div>
 </div>
@@ -250,7 +297,6 @@ const AXIS = {
 
 let D = null;        // dati globali
 let CY = null;       // anno selezionato
-let CR = 30;         // range giorni
 let charts = {};
 let rendered = {};   // sezioni già renderizzate
 
@@ -480,32 +526,42 @@ function renderAnno() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// GIORNALIERO
+// PERIODO — raw 30-min su range date personalizzato
 // ══════════════════════════════════════════════════════════════
-function setRange(days, btn) {
-  CR = days;
-  document.querySelectorAll('#range-sel .sel-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  renderGiornaliero();
+function dewPt(t, h) {
+  const a = 17.27, b = 237.3;
+  const alpha = (a * t / (b + t)) + Math.log(h / 100);
+  return +(b * alpha / (a - alpha)).toFixed(2);
 }
 
-function renderGiornaliero() {
-  const rawAll = D.raw || [];
-  if (!rawAll.length) {
-    document.getElementById('range-sel').style.display    = 'none';
-    document.getElementById('daily-empty').style.display  = '';
-    document.getElementById('daily-charts').style.display = 'none';
-    return;
-  }
-  document.getElementById('range-sel').style.display    = '';
-  document.getElementById('daily-empty').style.display  = 'none';
-  document.getElementById('daily-charts').style.display = '';
+function setPeriod(days, btn) {
+  document.querySelectorAll('#period-presets .sel-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const to   = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - (days - 1));
+  document.getElementById('p-from').value = from.toISOString().slice(0, 10);
+  document.getElementById('p-to').value   = to.toISOString().slice(0, 10);
+  renderPeriodo();
+}
 
-  let data = rawAll;
-  if (CR < 9999) {
-    const cutMs = Date.now() - CR * 24 * 3600 * 1000;
-    data = data.filter(r => r.ts >= cutMs);
-  }
+function customPeriod() {
+  document.querySelectorAll('#period-presets .sel-btn').forEach(b => b.classList.remove('active'));
+  renderPeriodo();
+}
+
+function renderPeriodo() {
+  const rawAll  = D.raw || [];
+  const fromVal = document.getElementById('p-from').value;
+  const toVal   = document.getElementById('p-to').value;
+  const fromMs  = fromVal ? new Date(fromVal + 'T00:00:00').getTime() : 0;
+  const toMs    = toVal   ? new Date(toVal   + 'T23:59:59').getTime() : Infinity;
+  const data    = rawAll.filter(r => r.ts >= fromMs && r.ts <= toMs);
+
+  const empty  = document.getElementById('periodo-empty');
+  const charts = document.getElementById('periodo-charts');
+  if (!data.length) { empty.style.display = ''; charts.style.display = 'none'; return; }
+  empty.style.display = 'none'; charts.style.display = '';
 
   const labels = data.map(r => {
     const d  = new Date(r.ts);
@@ -516,30 +572,110 @@ function renderGiornaliero() {
     return dd+'/'+mm+' '+HH+':'+MM;
   });
 
-  // Temperatura — linea continua su tutti i campioni
-  mkChart('c-daily-temp','line',{ labels, datasets:[
+  mkChart('c-periodo-temp','line',{ labels, datasets:[
     { label:'Temperatura °C', data:data.map(r=>r.t),
       borderColor:'#f97316', backgroundColor:'#f9731618',
       fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
   ]},{
     ...CHART_DEFAULTS,
-    plugins:{
-      legend:{ labels:{ color:'#94a3b8' } },
-      tooltip:{ callbacks:{ label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C' } },
-    },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:16}}), y:AXIS.y('°') },
+    plugins:{ legend:{labels:{color:'#94a3b8'}},
+      tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
   });
 
-  // Umidità — linea continua su tutti i campioni
-  mkChart('c-daily-hum','line',{ labels, datasets:[
+  mkChart('c-periodo-hum','line',{ labels, datasets:[
     { label:'Umidità %', data:data.map(r=>r.h),
       borderColor:'#22c55e', backgroundColor:'#22c55e18',
       fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
   ]},{
     ...CHART_DEFAULTS,
-    plugins:{ legend:{ labels:{ color:'#94a3b8' } } },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:16}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
+    plugins:{ legend:{labels:{color:'#94a3b8'}} },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
   });
+
+  mkChart('c-periodo-rd','line',{ labels, datasets:[
+    { label:'Punto di rugiada °C', data:data.map(r=>dewPt(r.t,r.h)),
+      borderColor:'#a855f7', backgroundColor:'#a855f718',
+      fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{labels:{color:'#94a3b8'}},
+      tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// GIORNALIERO — aggregati per giorno (T, umidità, rugiada, pioggia)
+// ══════════════════════════════════════════════════════════════
+function renderGiornaliero() {
+  const gior = D.giornaliero || [];
+  const empty  = document.getElementById('daily-empty');
+  const charts = document.getElementById('daily-charts');
+  if (!gior.length) { empty.style.display = ''; charts.style.display = 'none'; return; }
+  empty.style.display = 'none'; charts.style.display = '';
+
+  const labels = gior.map(d => {
+    const [, m, dd] = d.data.split('-');
+    return dd + '/' + m;
+  });
+
+  // Temperatura
+  mkChart('c-daily-temp','line',{ labels, datasets:[
+    { label:'T.max',   data:gior.map(d=>d.tMax),
+      borderColor:'#ef444490', backgroundColor:'#ef444415', fill:'+1', tension:0.3, pointRadius:0, borderWidth:1.5 },
+    { label:'T.media', data:gior.map(d=>d.tMedia),
+      borderColor:'#f97316', fill:false, tension:0.3, pointRadius:0, borderWidth:2.5 },
+    { label:'T.min',   data:gior.map(d=>d.tMin),
+      borderColor:'#60a5fa90', backgroundColor:'#60a5fa15', fill:false, tension:0.3, pointRadius:0, borderWidth:1.5 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{labels:{color:'#94a3b8'}},
+      tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
+  });
+
+  // Umidità
+  mkChart('c-daily-hum','line',{ labels, datasets:[
+    { label:'U.max',   data:gior.map(d=>d.hMax),
+      borderColor:'#94a3b860', backgroundColor:'#22c55e10', fill:'+1', tension:0.3, pointRadius:0, borderWidth:1 },
+    { label:'U.media', data:gior.map(d=>d.hMedia),
+      borderColor:'#22c55e', fill:false, tension:0.3, pointRadius:0, borderWidth:2.5 },
+    { label:'U.min',   data:gior.map(d=>d.hMin),
+      borderColor:'#94a3b860', fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{labels:{color:'#94a3b8'}} },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
+  });
+
+  // Punto di rugiada
+  mkChart('c-daily-rd','line',{ labels, datasets:[
+    { label:'RD.max',   data:gior.map(d=>d.rdMax),
+      borderColor:'#a855f760', fill:'+1', borderDash:[4,4], tension:0.3, pointRadius:0, borderWidth:1 },
+    { label:'RD.media', data:gior.map(d=>d.rdMedia),
+      borderColor:'#a855f7', backgroundColor:'#a855f712', fill:false, tension:0.3, pointRadius:0, borderWidth:2 },
+    { label:'RD.min',   data:gior.map(d=>d.rdMin),
+      borderColor:'#a855f760', fill:false, borderDash:[4,4], tension:0.3, pointRadius:0, borderWidth:1 },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{labels:{color:'#94a3b8'}} },
+    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
+  });
+
+  // Pioggia (visibile solo se dati presenti)
+  const hasPio = gior.some(d => d.pioggia);
+  document.getElementById('daily-rain-card').style.display = hasPio ? '' : 'none';
+  if (hasPio) {
+    mkChart('c-daily-rain','bar',{ labels, datasets:[
+      { label:'Pioggia mm', data:gior.map(d=>d.pioggia||0),
+        backgroundColor:'#60a5fa55', borderColor:'#60a5fa', borderWidth:1.5, borderRadius:3 },
+    ]},{
+      ...CHART_DEFAULTS,
+      plugins:{ legend:{display:false} },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y(' mm') },
+    });
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -557,7 +693,8 @@ function nav(name, btn) {
   btn.classList.add('active');
   // render lazy: solo la prima volta che la sezione diventa visibile
   if (!rendered[name]) {
-    if (name === 'anno')        renderAnno();
+    if (name === 'anno') renderAnno();
+    else if (name === 'periodo') setPeriod(3, document.querySelector('#period-presets .sel-btn[data-days="3"]'));
     else if (name === 'giornaliero') renderGiornaliero();
     rendered[name] = true;
   }

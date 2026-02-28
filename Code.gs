@@ -152,9 +152,15 @@ function serveJsonData() {
         const recs  = byDay[data];
         const temps = recs.map(r => r.t);
         const hums  = recs.map(r => r.h);
-        const avg   = arr => arr.reduce((a, b) => a + b) / arr.length;
+        const dps   = recs.map(r => {
+          const a = 17.27, b = 237.3;
+          const alpha = (a * r.t / (b + r.t)) + Math.log(r.h / 100);
+          return b * alpha / (a - alpha);
+        });
+        const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
         return { data, tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
-                       hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums) };
+                       hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
+                       rdMin: Math.min(...dps),  rdMedia: avg(dps),  rdMax: Math.max(...dps) };
       });
 
       // Integra mese corrente in mensile se non già presente in Foglio 1
