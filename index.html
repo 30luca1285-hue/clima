@@ -147,7 +147,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v12</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v13</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -167,6 +167,7 @@
   <button onclick="nav('panoramica',this)">Panoramica</button>
   <button onclick="nav('anno',this)">Per Anno</button>
   <button class="active" onclick="nav('periodo',this)">Periodo</button>
+  <button onclick="nav('previsioni',this)">Previsioni</button>
 </div>
 
 <!-- ══ LOADING ════════════════════════════════════════════════ -->
@@ -252,6 +253,40 @@
   </div>
 </div>
 
+
+<!-- ══ PREVISIONI ══════════════════════════════════════════════ -->
+<div id="s-previsioni" class="section">
+  <div id="prev-nodata" class="empty" style="display:none">
+    Dati pressione non ancora disponibili.<br>
+    Attendi il prossimo aggiornamento automatico (ogni 10 min).
+  </div>
+  <div id="prev-content" style="display:none">
+    <div class="stats-grid" id="prev-grid"></div>
+    <div class="card">
+      <div class="card-title">Previsione locale — basata su pressione, umidità e temperatura</div>
+      <div id="prev-forecast" style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;padding:8px 0">
+        <div id="prev-icon" style="font-size:4rem;line-height:1"></div>
+        <div>
+          <div id="prev-title" style="font-size:1.3rem;font-weight:700;margin-bottom:8px"></div>
+          <div id="prev-desc"  style="color:var(--muted);font-size:0.9rem;max-width:500px;line-height:1.6"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Tendenza pressione — ultime 6 ore (hPa)</div>
+      <div class="chart-wrap h200"><canvas id="c-prev-press"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Come funziona la previsione</div>
+      <div style="color:var(--muted);font-size:0.82rem;line-height:1.8">
+        <b style="color:var(--text)">Tendenza pressione (3h):</b> &gt;+1.5 hPa = in aumento → miglioramento · &lt;−1.5 hPa = in calo → peggioramento · altrimenti stabile<br>
+        <b style="color:var(--text)">Livello assoluto:</b> &gt;1020 hPa = alta pressione (bel tempo) · 1000–1020 = variabile · &lt;1000 = bassa pressione (perturbato)<br>
+        <b style="color:var(--text)">Umidità:</b> sopra 80% con pressione in calo aumenta la probabilità di precipitazioni<br>
+        <span style="color:var(--accent)">Dati locali dalla stazione Netatmo — nessuna fonte esterna.</span>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 // ╔══════════════════════════════════════════════════════════╗
@@ -613,6 +648,99 @@ function renderPeriodo() {
 
 
 // ══════════════════════════════════════════════════════════════
+// PREVISIONI — regole barometriche classiche
+// ══════════════════════════════════════════════════════════════
+function calcForecast(raw) {
+  const withPress = raw.filter(r => r.press != null);
+  if (!withPress.length) return null;
+
+  const last     = withPress[withPress.length - 1];
+  const pressNow = last.press;
+  const humNow   = last.h;
+
+  // Tendenza ultime 3h
+  const cutoff3h  = Date.now() - 3 * 3600 * 1000;
+  const press3h   = withPress.filter(r => r.ts >= cutoff3h);
+  const trend3h   = press3h.length >= 2
+    ? press3h[press3h.length - 1].press - press3h[0].press
+    : 0;
+
+  let tendency, tendencyLabel, tendencyColor;
+  if      (trend3h >  1.5) { tendency = 'rising';  tendencyLabel = '↑ In aumento (+' + trend3h.toFixed(1) + ' hPa)'; tendencyColor = 'var(--green)';  }
+  else if (trend3h < -1.5) { tendency = 'falling'; tendencyLabel = '↓ In calo ('    + trend3h.toFixed(1) + ' hPa)'; tendencyColor = 'var(--hot)';    }
+  else                      { tendency = 'stable';  tendencyLabel = '→ Stabile ('    + (trend3h >= 0 ? '+' : '') + trend3h.toFixed(1) + ' hPa)'; tendencyColor = 'var(--muted)'; }
+
+  const level = pressNow > 1020 ? 'high' : pressNow > 1000 ? 'medium' : 'low';
+  const highHum = humNow > 80;
+
+  // Matrice previsione
+  const matrix = {
+    high:   { rising:  ['☀️',  'Bel tempo stabile',       'Alta pressione in aumento. Condizioni soleggiate attese nelle prossime 24 ore.'],
+              stable:  ['🌤️', 'Bel tempo',               'Alta pressione stabile. Tempo sereno o poco nuvoloso.'],
+              falling: ['⛅',  'Variabilità in arrivo',   'Pressione in calo da valori alti. Possibile aumento della nuvolosità nelle prossime ore.'] },
+    medium: { rising:  ['🌤️', 'Miglioramento probabile', 'Pressione in aumento verso valori favorevoli. Miglioramento atteso.'],
+              stable:  ['⛅',  'Tempo variabile',         'Pressione nella norma. Condizioni variabili' + (highHum ? ', umidità elevata: nebbia o nubi basse possibili.' : '.')],
+              falling: ['🌧️', 'Peggioramento in corso',  'Pressione in calo. Probabile aumento della nuvolosità e precipitazioni' + (highHum ? ' — umidità elevata, pioggia molto probabile.' : '.')] },
+    low:    { rising:  ['⛅',  'Lento miglioramento',     'Bassa pressione in aumento. Condizioni ancora instabili ma in graduale miglioramento.'],
+              stable:  ['🌧️', 'Tempo perturbato',        'Bassa pressione stabile. Condizioni perturbate con precipitazioni probabili.'],
+              falling: ['⛈️', 'Forte perturbazione',     'Bassa pressione in ulteriore calo. Condizioni molto instabili, possibili temporali.'] },
+  };
+
+  const [icon, title, desc] = matrix[level][tendency];
+  return { pressNow, trend3h, tendency, tendencyLabel, tendencyColor, level, humNow, icon, title, desc };
+}
+
+function renderPrevisioni() {
+  const raw = D.raw || [];
+  const fc  = calcForecast(raw);
+
+  if (!fc) {
+    document.getElementById('prev-nodata').style.display   = '';
+    document.getElementById('prev-content').style.display  = 'none';
+    return;
+  }
+  document.getElementById('prev-nodata').style.display  = 'none';
+  document.getElementById('prev-content').style.display = '';
+
+  // Stats grid
+  const levelLabel = { high: 'Alta (>1020)', medium: 'Normale', low: 'Bassa (<1000)' }[fc.level];
+  const levelColor = { high: 'var(--green)', medium: 'var(--orange)', low: 'var(--hot)' }[fc.level];
+  const stats = [
+    { label: 'Pressione attuale', val: fc.pressNow.toFixed(1) + ' hPa', color: levelColor },
+    { label: 'Livello',           val: levelLabel,                        color: levelColor },
+    { label: 'Tendenza 3h',       val: fc.tendencyLabel,                  color: fc.tendencyColor },
+    { label: 'Umidità attuale',   val: fc.humNow.toFixed(0) + ' %',       color: fc.humNow > 80 ? 'var(--orange)' : 'var(--green)' },
+  ];
+  document.getElementById('prev-grid').innerHTML = stats.map(s =>
+    `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-val" style="font-size:1.1rem;color:${s.color}">${s.val}</div></div>`
+  ).join('');
+
+  // Forecast card
+  document.getElementById('prev-icon').textContent  = fc.icon;
+  document.getElementById('prev-title').textContent = fc.title;
+  document.getElementById('prev-desc').textContent  = fc.desc;
+
+  // Sparkline pressione ultime 6h
+  const cutoff6h   = Date.now() - 6 * 3600 * 1000;
+  const press6h    = (D.raw || []).filter(r => r.ts >= cutoff6h && r.press != null);
+  if (press6h.length >= 2) {
+    const lbls = press6h.map(r => {
+      const d = new Date(r.ts);
+      return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    });
+    mkChart('c-prev-press','line',{ labels: lbls, datasets:[
+      { label:'Pressione hPa', data: press6h.map(r => r.press),
+        borderColor:'#a855f7', backgroundColor:'#a855f718',
+        fill:true, tension:0.3, pointRadius:2, borderWidth:2 },
+    ]},{
+      ...CHART_DEFAULTS,
+      plugins:{ legend:{display:false} },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:8}}), y:AXIS.y(' hPa') },
+    });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 // UTILITY
 // ══════════════════════════════════════════════════════════════
 function mkChart(id, type, data, options) {
@@ -627,9 +755,10 @@ function nav(name, btn) {
   btn.classList.add('active');
   // render lazy: solo la prima volta che la sezione diventa visibile
   if (!rendered[name]) {
-    if (name === 'panoramica') renderPanoramica();
-    else if (name === 'anno') renderAnno();
-    else if (name === 'periodo') setPeriod(3, document.querySelector('#period-presets .sel-btn[data-days="3"]'));
+    if      (name === 'panoramica')  renderPanoramica();
+    else if (name === 'anno')        renderAnno();
+    else if (name === 'periodo')     setPeriod(3, document.querySelector('#period-presets .sel-btn[data-days="3"]'));
+    else if (name === 'previsioni')  renderPrevisioni();
     rendered[name] = true;
   }
 }
