@@ -147,13 +147,14 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v11</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v12</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
     <div class="live-temp" id="hdr-t">—</div>
     <div>
       <div class="live-hum" id="hdr-h">— %</div>
+      <div class="live-meta" id="hdr-press" style="color:var(--purple)"></div>
       <div class="live-meta" id="hdr-ts"></div>
     </div>
   </div>
@@ -244,6 +245,10 @@
       <div class="card-title">Punto di rugiada — ogni 30 min (°C)</div>
       <div class="chart-wrap h260"><canvas id="c-periodo-rd"></canvas></div>
     </div>
+    <div id="card-periodo-press" class="card" style="display:none">
+      <div class="card-title">Pressione atmosferica — ogni 10 min (hPa)</div>
+      <div class="chart-wrap h260"><canvas id="c-periodo-press"></canvas></div>
+    </div>
   </div>
 </div>
 
@@ -299,6 +304,9 @@ function init() {
     document.getElementById('hdr-ts').textContent = ts.toLocaleString('it-IT');
     document.getElementById('hdr-t').style.color =
       t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
+    if (D.attuale.press != null) {
+      document.getElementById('hdr-press').textContent = D.attuale.press.toFixed(1) + ' hPa';
+    }
   }
   document.getElementById('hdr-update').textContent =
     'Aggiornato: ' + new Date(D.aggiornato).toLocaleTimeString('it-IT');
@@ -584,6 +592,23 @@ function renderPeriodo() {
       tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
     scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
   });
+
+  // Pressione — mostra la card solo se ci sono dati
+  const pressData = data.map(r => r.press != null ? r.press : null);
+  const hasPress  = pressData.some(v => v !== null);
+  document.getElementById('card-periodo-press').style.display = hasPress ? '' : 'none';
+  if (hasPress) {
+    mkChart('c-periodo-press','line',{ labels, datasets:[
+      { label:'Pressione hPa', data:pressData,
+        borderColor:'#a855f7', backgroundColor:'#a855f718',
+        fill:true, tension:0.2, pointRadius:0, borderWidth:1.8, spanGaps:true },
+    ]},{
+      ...CHART_DEFAULTS,
+      plugins:{ legend:{labels:{color:'#94a3b8'}},
+        tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+' hPa'}} },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y(' hPa') },
+    });
+  }
 }
 
 
