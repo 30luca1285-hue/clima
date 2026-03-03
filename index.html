@@ -336,7 +336,7 @@ const CHART_DEFAULTS = {
 };
 const AXIS = {
   x: (extra={}) => ({ ticks: { color: '#94a3b8', ...extra.xticks }, grid: { color: '#334155' }, ...extra.x }),
-  y: (sfx='', extra={}) => ({ ticks: { color: '#94a3b8', callback: v => v + sfx, ...extra.yticks }, grid: { color: '#334155' }, ...extra.y }),
+  y: (sfx='', extra={}) => ({ ticks: { color: '#94a3b8', callback: v => parseFloat(v.toFixed(1)) + sfx, ...extra.yticks }, grid: { color: '#334155' }, ...extra.y }),
 };
 
 let D = null;        // dati globali
@@ -780,7 +780,7 @@ function renderPrevisioni() {
     ]},{
       ...CHART_DEFAULTS,
       plugins:{ legend:{display:false} },
-      scales:{ x:AXIS.x({xticks:{maxTicksLimit:8}}), y:AXIS.y(' hPa') },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:6}}), y:AXIS.y(' hPa') },
     });
   }
 }
