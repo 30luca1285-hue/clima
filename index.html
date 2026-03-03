@@ -135,6 +135,10 @@
     /* ── EMPTY STATE ── */
     .empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 0.9rem; }
 
+    /* ── RAIN BAR ── */
+    .rain-bar-bg { background: var(--border); border-radius: 4px; height: 7px; margin-top: 6px; }
+    .rain-bar-fg { height: 100%; border-radius: 4px; transition: width .5s; }
+
     @media (max-width: 600px) {
       .header { padding: 12px 16px; gap: 16px; }
       .live-temp { font-size: 2rem; }
@@ -147,7 +151,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v13</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v14</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -266,9 +270,16 @@
       <div class="card-title">Previsione locale — basata su pressione, umidità e temperatura</div>
       <div id="prev-forecast" style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;padding:8px 0">
         <div id="prev-icon" style="font-size:4rem;line-height:1"></div>
-        <div>
+        <div style="flex:1;min-width:200px">
           <div id="prev-title" style="font-size:1.3rem;font-weight:700;margin-bottom:8px"></div>
           <div id="prev-desc"  style="color:var(--muted);font-size:0.9rem;max-width:500px;line-height:1.6"></div>
+          <div style="margin-top:14px;max-width:320px">
+            <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:var(--muted);margin-bottom:4px">
+              <span>Probabilità pioggia</span>
+              <span id="prev-rain-pct" style="font-weight:700;color:var(--text)"></span>
+            </div>
+            <div class="rain-bar-bg"><div id="prev-rain-bar" class="rain-bar-fg"></div></div>
+          </div>
         </div>
       </div>
     </div>
@@ -276,6 +287,24 @@
       <div class="card-title">Tendenza pressione — ultime 6 ore (hPa)</div>
       <div class="chart-wrap h200"><canvas id="c-prev-press"></canvas></div>
     </div>
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <span>Mappa satellite / radar — Windy.com</span>
+        <div id="windy-btns" style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="sel-btn active" onclick="setWindyLayer('rain',this)">🌧️ Pioggia</button>
+          <button class="sel-btn" onclick="setWindyLayer('satellite',this)">🛰️ Satellite</button>
+          <button class="sel-btn" onclick="setWindyLayer('wind',this)">💨 Vento</button>
+          <button class="sel-btn" onclick="setWindyLayer('pressure',this)">🔵 Pressione</button>
+        </div>
+      </div>
+      <div style="margin-top:12px;border-radius:8px;overflow:hidden;line-height:0">
+        <iframe id="windy-frame"
+          src="https://embed.windy.com/embed2.html?lat=43.6&lon=13.5&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&detailLat=43.6&detailLon=13.5&width=650&height=450&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1"
+          width="100%" height="450" frameborder="0" style="border-radius:8px">
+        </iframe>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-title">Come funziona la previsione</div>
       <div style="color:var(--muted);font-size:0.82rem;line-height:1.8">
@@ -658,20 +687,31 @@ function calcForecast(raw) {
   const pressNow = last.press;
   const humNow   = last.h;
 
-  // Tendenza ultime 3h
+  // Tendenza ultime 3h + velocità hPa/h
   const cutoff3h  = Date.now() - 3 * 3600 * 1000;
   const press3h   = withPress.filter(r => r.ts >= cutoff3h);
   const trend3h   = press3h.length >= 2
-    ? press3h[press3h.length - 1].press - press3h[0].press
-    : 0;
+    ? press3h[press3h.length - 1].press - press3h[0].press : 0;
+  const rateHour  = press3h.length >= 2
+    ? trend3h / ((press3h[press3h.length-1].ts - press3h[0].ts) / 3600000) : 0;
 
   let tendency, tendencyLabel, tendencyColor;
-  if      (trend3h >  1.5) { tendency = 'rising';  tendencyLabel = '↑ In aumento (+' + trend3h.toFixed(1) + ' hPa)'; tendencyColor = 'var(--green)';  }
-  else if (trend3h < -1.5) { tendency = 'falling'; tendencyLabel = '↓ In calo ('    + trend3h.toFixed(1) + ' hPa)'; tendencyColor = 'var(--hot)';    }
-  else                      { tendency = 'stable';  tendencyLabel = '→ Stabile ('    + (trend3h >= 0 ? '+' : '') + trend3h.toFixed(1) + ' hPa)'; tendencyColor = 'var(--muted)'; }
+  if      (rateHour >  0.5) { tendency = 'rising';  tendencyLabel = '↑ ' + (rateHour > 0 ? '+' : '') + rateHour.toFixed(1) + ' hPa/h'; tendencyColor = 'var(--green)';  }
+  else if (rateHour < -0.5) { tendency = 'falling'; tendencyLabel = '↓ ' + rateHour.toFixed(1) + ' hPa/h'; tendencyColor = 'var(--hot)';    }
+  else                       { tendency = 'stable';  tendencyLabel = '→ ' + (rateHour >= 0 ? '+' : '') + rateHour.toFixed(1) + ' hPa/h'; tendencyColor = 'var(--muted)'; }
 
-  const level = pressNow > 1020 ? 'high' : pressNow > 1000 ? 'medium' : 'low';
+  const level   = pressNow > 1020 ? 'high' : pressNow > 1000 ? 'medium' : 'low';
   const highHum = humNow > 80;
+
+  // Probabilità pioggia 0-100%
+  const dpNow  = dewPt(last.t, last.h);
+  const dpDep  = last.t - dpNow;  // escursione punto di rugiada
+  let rainProb = 0;
+  rainProb += pressNow < 1000 ? 40 : pressNow < 1005 ? 30 : pressNow < 1010 ? 18 : pressNow < 1015 ? 8 : pressNow < 1020 ? 3 : 0;
+  rainProb += rateHour < -3 ? 30 : rateHour < -2 ? 20 : rateHour < -1 ? 12 : rateHour < -0.3 ? 5 : 0;
+  rainProb += humNow > 90 ? 20 : humNow > 82 ? 12 : humNow > 75 ? 6 : 0;
+  rainProb += dpDep < 2 ? 10 : dpDep < 4 ? 6 : dpDep < 7 ? 2 : 0;
+  rainProb = Math.min(Math.round(rainProb), 100);
 
   // Matrice previsione
   const matrix = {
@@ -687,7 +727,7 @@ function calcForecast(raw) {
   };
 
   const [icon, title, desc] = matrix[level][tendency];
-  return { pressNow, trend3h, tendency, tendencyLabel, tendencyColor, level, humNow, icon, title, desc };
+  return { pressNow, rateHour, rainProb, tendency, tendencyLabel, tendencyColor, level, humNow, icon, title, desc };
 }
 
 function renderPrevisioni() {
@@ -705,11 +745,12 @@ function renderPrevisioni() {
   // Stats grid
   const levelLabel = { high: 'Alta (>1020)', medium: 'Normale', low: 'Bassa (<1000)' }[fc.level];
   const levelColor = { high: 'var(--green)', medium: 'var(--orange)', low: 'var(--hot)' }[fc.level];
+  const rainColor  = fc.rainProb >= 60 ? 'var(--hot)' : fc.rainProb >= 30 ? 'var(--orange)' : 'var(--green)';
   const stats = [
-    { label: 'Pressione attuale', val: fc.pressNow.toFixed(1) + ' hPa', color: levelColor },
-    { label: 'Livello',           val: levelLabel,                        color: levelColor },
-    { label: 'Tendenza 3h',       val: fc.tendencyLabel,                  color: fc.tendencyColor },
-    { label: 'Umidità attuale',   val: fc.humNow.toFixed(0) + ' %',       color: fc.humNow > 80 ? 'var(--orange)' : 'var(--green)' },
+    { label: 'Pressione',      val: fc.pressNow.toFixed(1) + ' hPa',  color: levelColor },
+    { label: 'Variazione',     val: fc.tendencyLabel,                   color: fc.tendencyColor },
+    { label: 'Prob. pioggia',  val: fc.rainProb + ' %',                color: rainColor },
+    { label: 'Umidità',        val: fc.humNow.toFixed(0) + ' %',       color: fc.humNow > 80 ? 'var(--orange)' : 'var(--green)' },
   ];
   document.getElementById('prev-grid').innerHTML = stats.map(s =>
     `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-val" style="font-size:1.1rem;color:${s.color}">${s.val}</div></div>`
@@ -719,6 +760,10 @@ function renderPrevisioni() {
   document.getElementById('prev-icon').textContent  = fc.icon;
   document.getElementById('prev-title').textContent = fc.title;
   document.getElementById('prev-desc').textContent  = fc.desc;
+  document.getElementById('prev-rain-pct').textContent = fc.rainProb + '%';
+  const bar = document.getElementById('prev-rain-bar');
+  bar.style.width = fc.rainProb + '%';
+  bar.style.background = fc.rainProb >= 60 ? 'var(--hot)' : fc.rainProb >= 30 ? 'var(--orange)' : 'var(--green)';
 
   // Sparkline pressione ultime 6h
   const cutoff6h   = Date.now() - 6 * 3600 * 1000;
@@ -761,6 +806,15 @@ function nav(name, btn) {
     else if (name === 'previsioni')  renderPrevisioni();
     rendered[name] = true;
   }
+}
+
+function setWindyLayer(layer, btn) {
+  document.querySelectorAll('#windy-btns .sel-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const f = document.getElementById('windy-frame');
+  f.src = 'https://embed.windy.com/embed2.html?lat=43.6&lon=13.5&zoom=8&level=surface&overlay=' + layer +
+    '&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates' +
+    '&detail=&detailLat=43.6&detailLon=13.5&width=650&height=450&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1';
 }
 
 // ── START ─────────────────────────────────────────────────────
