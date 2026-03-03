@@ -131,9 +131,9 @@ function serveJsonData() {
 
   if (dataSheet && dataSheet.getLastRow() > 1) {
     const cutoff30d = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-    raw = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 4).getValues()
+    raw = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 5).getValues()
       .filter(r => r[0] instanceof Date && r[0] >= cutoff30d && r[1] !== '' && !isNaN(parseFloat(r[1])))
-      .map(r => ({ ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: parseFloat(r[3]) || 0 }));
+      .map(r => ({ ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: parseFloat(r[3]) || 0, press: r[4] !== '' && r[4] !== null ? parseFloat(r[4]) : null }));
 
     if (raw.length) {
       attuale = raw[raw.length - 1];
@@ -361,6 +361,10 @@ function fetchAndSaveData() {
     const rain    = (rainMod && rainMod.dashboard_data && rainMod.dashboard_data.Rain != null)
                     ? rainMod.dashboard_data.Rain : 0;
 
+    // Pressione da NAMain (stazione base indoor) — hPa
+    const press = (device.dashboard_data && device.dashboard_data.Pressure != null)
+                  ? device.dashboard_data.Pressure : null;
+
     const ss    = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = getOrCreateDataSheet(ss);
 
@@ -374,7 +378,7 @@ function fetchAndSaveData() {
       }
     }
 
-    sheet.appendRow([timestamp, temp, hum, rain]);
+    sheet.appendRow([timestamp, temp, hum, rain, press]);
     Logger.log('Salvato: ' + timestamp.toLocaleString('it-IT') + ' — ' + temp + '°C — ' + hum + '%');
 
     updateDashboard();
@@ -742,17 +746,19 @@ function getOrCreateDataSheet(ss) {
   let sheet = ss.getSheetByName(CFG.DATA_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(CFG.DATA_SHEET);
-    sheet.getRange(1, 1, 1, 4)
-      .setValues([['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)']])
+    sheet.getRange(1, 1, 1, 5)
+      .setValues([['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)', 'Pressione (hPa)']])
       .setFontWeight('bold').setBackground('#e8eaf6');
     sheet.setColumnWidth(1, 180);
     sheet.setColumnWidth(2, 140);
     sheet.setColumnWidth(3, 120);
     sheet.setColumnWidth(4, 120);
+    sheet.setColumnWidth(5, 130);
     sheet.getRange('A2:A').setNumberFormat('dd/MM/yyyy HH:mm');
     sheet.getRange('B2:B').setNumberFormat('0.0');
     sheet.getRange('C2:C').setNumberFormat('0');
     sheet.getRange('D2:D').setNumberFormat('0.0');
+    sheet.getRange('E2:E').setNumberFormat('0.0');
   }
   return sheet;
 }
