@@ -147,7 +147,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v10</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v11</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -163,9 +163,9 @@
 
 <!-- ══ NAV ════════════════════════════════════════════════════ -->
 <div class="nav">
-  <button class="active" onclick="nav('panoramica',this)">Panoramica</button>
+  <button onclick="nav('panoramica',this)">Panoramica</button>
   <button onclick="nav('anno',this)">Per Anno</button>
-  <button onclick="nav('periodo',this)">Periodo</button>
+  <button class="active" onclick="nav('periodo',this)">Periodo</button>
 </div>
 
 <!-- ══ LOADING ════════════════════════════════════════════════ -->
@@ -289,7 +289,7 @@ async function load() {
 
 function init() {
   document.getElementById('loading').style.display = 'none';
-  document.getElementById('s-panoramica').classList.add('active');
+  document.getElementById('s-periodo').classList.add('active');
 
   // Header
   if (D.attuale) {
@@ -305,8 +305,8 @@ function init() {
 
   updateSyncStatus();
   buildYearSelector();        // prepara CY e i bottoni anno
-  renderPanoramica();         // sezione già visibile → dimensioni corrette
-  rendered['panoramica'] = true;
+  setPeriod(1, document.querySelector('#period-presets .sel-btn[data-days="1"]'));
+  rendered['periodo'] = true;
 }
 
 function updateSyncStatus() {
@@ -602,7 +602,8 @@ function nav(name, btn) {
   btn.classList.add('active');
   // render lazy: solo la prima volta che la sezione diventa visibile
   if (!rendered[name]) {
-    if (name === 'anno') renderAnno();
+    if (name === 'panoramica') renderPanoramica();
+    else if (name === 'anno') renderAnno();
     else if (name === 'periodo') setPeriod(3, document.querySelector('#period-presets .sel-btn[data-days="3"]'));
     rendered[name] = true;
   }
