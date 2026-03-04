@@ -158,12 +158,20 @@ function serveJsonData() {
           const alpha = (a * r.t / (b + r.t)) + Math.log(r.h / 100);
           return b * alpha / (a - alpha);
         });
-        const pios  = recs.map(r => r.p || 0);
+        // Pioggia: sum_rain_1 è una finestra scorrevole di 60 min → sommare i valori
+        // farebbe triple-counting. Usiamo le differenze positive consecutive:
+        // ogni incremento = nuova pioggia caduta nell'intervallo di 10 min.
+        let pioTot = 0;
+        for (let i = 1; i < recs.length; i++) {
+          const delta = (recs[i].p || 0) - (recs[i-1].p || 0);
+          if (delta > 0) pioTot += delta;
+        }
+        pioTot = Math.round(pioTot * 10) / 10;
         const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
         return { data, tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
                        hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
                        rdMin: Math.min(...dps),  rdMedia: avg(dps),  rdMax: Math.max(...dps),
-                       pioggia: pios.reduce((a, b) => a + b, 0) };
+                       pioggia: pioTot };
       });
 
       // Integra mese corrente in mensile se non già presente in Foglio 1
@@ -358,8 +366,18 @@ function fetchAndSaveData() {
 
     // Pioggia da NAModule3 (rain gauge) — 0 se non presente o offline
     const rainMod = device.modules.find(m => m.type === 'NAModule3');
-    const rain    = (rainMod && rainMod.dashboard_data && rainMod.dashboard_data.Rain != null)
-                    ? rainMod.dashboard_data.Rain : 0;
+    const rain    = (rainMod && rainMod.dashboard_data)
+                    ? (rainMod.dashboard_data.sum_rain_1 != null ? rainMod.dashboard_data.sum_rain_1
+                       : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
+                    : 0;
+    if (rainMod) {
+      Logger.log('NAModule3 trovato: ' + (rainMod.module_name || rainMod._id) +
+                 ' | sum_rain_1=' + rainMod.dashboard_data.sum_rain_1 +
+                 ' Rain=' + rainMod.dashboard_data.Rain + ' mm | reachable=' + rainMod.reachable);
+    } else {
+      const tipi = device.modules.map(m => m.type).join(', ');
+      Logger.log('NAModule3 NON trovato. Moduli presenti: ' + tipi);
+    }
 
     // Pressione da NAMain (stazione base indoor) — hPa
     const press = (device.dashboard_data && device.dashboard_data.Pressure != null)
@@ -379,7 +397,7 @@ function fetchAndSaveData() {
     }
 
     sheet.appendRow([timestamp, temp, hum, rain, press]);
-    Logger.log('Salvato: ' + timestamp.toLocaleString('it-IT') + ' — ' + temp + '°C — ' + hum + '%');
+    Logger.log('Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
 
     updateDashboard();
 
@@ -744,11 +762,10 @@ function showStatus() {
 
 function getOrCreateDataSheet(ss) {
   let sheet = ss.getSheetByName(CFG.DATA_SHEET);
+  const HEADERS = ['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)', 'Pressione (hPa)'];
   if (!sheet) {
     sheet = ss.insertSheet(CFG.DATA_SHEET);
-    sheet.getRange(1, 1, 1, 5)
-      .setValues([['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)', 'Pressione (hPa)']])
-      .setFontWeight('bold').setBackground('#e8eaf6');
+    sheet.getRange(1, 1, 1, 5).setValues([HEADERS]).setFontWeight('bold').setBackground('#e8eaf6');
     sheet.setColumnWidth(1, 180);
     sheet.setColumnWidth(2, 140);
     sheet.setColumnWidth(3, 120);
@@ -759,6 +776,12 @@ function getOrCreateDataSheet(ss) {
     sheet.getRange('C2:C').setNumberFormat('0');
     sheet.getRange('D2:D').setNumberFormat('0.0');
     sheet.getRange('E2:E').setNumberFormat('0.0');
+  } else {
+    // Aggiorna intestazioni mancanti (es. colonne aggiunte dopo la creazione iniziale del foglio)
+    HEADERS.forEach((h, i) => {
+      const c = sheet.getRange(1, i + 1);
+      if (c.getValue() !== h) c.setValue(h).setFontWeight('bold').setBackground('#e8eaf6');
+    });
   }
   return sheet;
 }
