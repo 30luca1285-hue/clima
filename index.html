@@ -74,6 +74,7 @@
     .chart-wrap { position: relative; }
     .chart-wrap.h260 { height: 260px; }
     .chart-wrap.h340 { height: 340px; }
+    .chart-wrap.h300 { height: 300px; }
     .chart-wrap.h420 { height: 420px; }
 
     /* ── STATS GRID ── */
@@ -159,6 +160,7 @@
     <div>
       <div class="live-hum" id="hdr-h">— %</div>
       <div class="live-meta" id="hdr-press" style="color:var(--purple)"></div>
+      <div class="live-meta" id="hdr-rain" style="color:var(--cold);display:none"></div>
       <div class="live-meta" id="hdr-ts"></div>
     </div>
   </div>
@@ -192,6 +194,10 @@
     <div class="chart-wrap h260"><canvas id="c-rain-yr"></canvas></div>
   </div>
   <div class="card">
+    <div class="card-title">Pioggia cumulativa per anno — confronto multi-anno (mm)</div>
+    <div class="chart-wrap h300"><canvas id="c-rain-cumul"></canvas></div>
+  </div>
+  <div class="card">
     <div class="card-title">Tabella riepilogativa — medie annuali</div>
     <div class="yr-table-wrap"><table id="tbl-annual"></table></div>
   </div>
@@ -211,6 +217,10 @@
   <div class="card">
     <div class="card-title">Pioggia mensile (mm)</div>
     <div class="chart-wrap h260"><canvas id="c-anno-rain"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Pioggia cumulativa — progressione annuale (mm)</div>
+    <div class="chart-wrap h260"><canvas id="c-anno-rain-cumul"></canvas></div>
   </div>
   <div class="card">
     <div class="card-title">Punto di rugiada mensile (°C)</div>
@@ -249,6 +259,10 @@
     <div class="card">
       <div class="card-title">Punto di rugiada — ogni 30 min (°C)</div>
       <div class="chart-wrap h260"><canvas id="c-periodo-rd"></canvas></div>
+    </div>
+    <div id="card-periodo-rain" class="card" style="display:none">
+      <div class="card-title">Pioggia — mm ultima ora per campione</div>
+      <div class="chart-wrap h260"><canvas id="c-periodo-rain"></canvas></div>
     </div>
     <div id="card-periodo-press" class="card" style="display:none">
       <div class="card-title">Pressione atmosferica — ogni 10 min (hPa)</div>
@@ -371,6 +385,19 @@ function init() {
     if (D.attuale.press != null) {
       document.getElementById('hdr-press').textContent = D.attuale.press.toFixed(1) + ' hPa';
     }
+    // Pioggia di oggi da giornaliero
+    const oggi = new Date().toISOString().slice(0, 10);
+    const gOggi = (D.giornaliero || []).find(g => {
+      const d = typeof g.data === 'number'
+        ? new Date(g.data).toISOString().slice(0, 10)
+        : String(g.data).slice(0, 10);
+      return d === oggi;
+    });
+    if (gOggi && gOggi.pioggia != null) {
+      const elRain = document.getElementById('hdr-rain');
+      elRain.textContent = '🌧️ ' + gOggi.pioggia.toFixed(1) + ' mm oggi';
+      elRain.style.display = '';
+    }
   }
   document.getElementById('hdr-update').textContent =
     'Aggiornato: ' + new Date(D.aggiornato).toLocaleTimeString('it-IT');
@@ -411,6 +438,7 @@ function renderPanoramica() {
   renderStatsGrid(anni);
   renderOverviewChart(anni);
   renderRainYrChart(anni);
+  renderRainCumulChart(anni);
   renderAnnualTable(anni);
 }
 
@@ -470,6 +498,33 @@ function renderRainYrChart(anni) {
     ...CHART_DEFAULTS,
     plugins:{ legend:{display:false} },
     scales:{ x:AXIS.x(), y:AXIS.y(' mm') },
+  });
+}
+
+function renderRainCumulChart(anni) {
+  const hasRain = anni.some(yr =>
+    Object.values(D.mensile[yr]).some(m => m.pioggia && m.pioggia > 0)
+  );
+  if (!hasRain) return;
+  const thisYr = new Date().getFullYear();
+  const datasets = anni.map((yr, i) => {
+    let cum = 0;
+    const data = MESI.map((_, m) => {
+      const s = D.mensile[yr][m];
+      if (s && s.pioggia != null) { cum += s.pioggia || 0; return +cum.toFixed(1); }
+      return null;
+    });
+    return {
+      label: String(yr), data,
+      borderColor: PALETTE[i % PALETTE.length],
+      backgroundColor: 'transparent',
+      borderWidth: yr === thisYr ? 3 : 1.8,
+      pointRadius: 3, tension: 0.2, spanGaps: true,
+    };
+  });
+  mkChart('c-rain-cumul', 'line', { labels: MESI, datasets }, {
+    ...CHART_DEFAULTS,
+    scales: { x: AXIS.x(), y: AXIS.y(' mm') },
   });
 }
 
@@ -564,6 +619,28 @@ function renderAnno() {
     scales:{ x:AXIS.x(), y:AXIS.y(' mm') },
   });
 
+  // Pioggia cumulativa
+  const pioCum = [];
+  let cum = 0;
+  MESI_F.forEach((_, i) => {
+    if (m[i] && m[i].pioggia != null) {
+      cum += m[i].pioggia || 0;
+      pioCum.push(+cum.toFixed(1));
+    } else {
+      pioCum.push(null);
+    }
+  });
+  mkChart('c-anno-rain-cumul','line',{ labels:MESI_F, datasets:[
+    { label:'Cumulata mm', data:pioCum,
+      borderColor:'#60a5fa', backgroundColor:'#60a5fa18',
+      fill:true, tension:0.2, pointRadius:5, borderWidth:2.5,
+      pointBackgroundColor:'#60a5fa', spanGaps:false },
+  ]},{
+    ...CHART_DEFAULTS,
+    plugins:{ legend:{display:false} },
+    scales:{ x:AXIS.x(), y:AXIS.y(' mm',{y:{min:0}}) },
+  });
+
   // Punto di rugiada
   const rdMin  = MESI_F.map((_,i) => m[i]?m[i].rdMin :null);
   const rdMed  = MESI_F.map((_,i) => m[i]?m[i].rdMedia:null);
@@ -656,6 +733,22 @@ function renderPeriodo() {
       tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
     scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
   });
+
+  // Pioggia — mostra la card solo se ci sono dati > 0
+  const rainData = data.map(r => r.p != null ? r.p : 0);
+  const hasRainP = rainData.some(v => v > 0);
+  document.getElementById('card-periodo-rain').style.display = hasRainP ? '' : 'none';
+  if (hasRainP) {
+    mkChart('c-periodo-rain', 'bar', { labels, datasets: [
+      { label: 'Pioggia mm/h', data: rainData,
+        backgroundColor: '#60a5fa55', borderColor: '#60a5fa', borderWidth: 1.5, borderRadius: 3 },
+    ]}, {
+      ...CHART_DEFAULTS,
+      plugins: { legend: { labels: { color: '#94a3b8' } },
+        tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(1) + ' mm' } } },
+      scales: { x: AXIS.x({ xticks: { maxTicksLimit: 14 } }), y: AXIS.y(' mm', { y: { min: 0 } }) },
+    });
+  }
 
   // Pressione — mostra la card solo se ci sono dati
   const pressData = data.map(r => r.press != null ? r.press : null);
