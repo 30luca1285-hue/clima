@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.2</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.3</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -302,6 +302,21 @@
       <div class="card-title">Variazione pressione SLP — multi-finestra</div>
       <div id="prev-trend-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px"></div>
     </div>
+    <div class="card" id="card-convective">
+      <div class="card-title">⛈️ Temporali convettivi — indici in quota (Open-Meteo / ECMWF)</div>
+      <div id="conv-loading" style="color:var(--muted);font-size:0.82rem;padding:8px 0">Caricamento indici convettivi...</div>
+      <div id="conv-content" style="display:none">
+        <div class="stats-grid" id="conv-grid"></div>
+        <div id="conv-summary" style="margin-top:12px;padding:12px 16px;border-radius:8px;display:flex;gap:14px;align-items:center">
+          <div id="conv-icon" style="font-size:2.4rem;line-height:1"></div>
+          <div>
+            <div id="conv-risk" style="font-size:1rem;font-weight:700;margin-bottom:4px"></div>
+            <div id="conv-desc" style="font-size:0.82rem;color:var(--muted);line-height:1.5"></div>
+          </div>
+        </div>
+      </div>
+      <div id="conv-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Dati convettivi non disponibili (controlla la connessione).</div>
+    </div>
     <div class="card">
       <div class="card-title">Pressione SLP — ultime 12 ore (hPa)</div>
       <div class="chart-wrap h200"><canvas id="c-prev-press"></canvas></div>
@@ -333,7 +348,8 @@
         <b style="color:var(--text)">Alert automatici:</b> calo &gt;3 hPa/3h = peggioramento rapido · &gt;6 hPa/3h = venti forti · &gt;10 hPa/3h = tempesta.<br>
         <b style="color:var(--text)">Probabilità pioggia:</b> calcolata su 4 fattori — pressione assoluta, tendenza, umidità relativa, spread T–Td (punto di rugiada).<br>
         <b style="color:var(--text)">Base nubi stimata:</b> ogni 1°C di spread T–Td corrisponde a ~125 m di base delle nubi.<br>
-        <span style="color:var(--accent)">Solo dati locali Netatmo — nessuna fonte esterna.</span>
+        <b style="color:var(--text)">Temporali convettivi (Open-Meteo):</b> CAPE = energia convettiva disponibile (>300 J/kg = instabile, >1000 = forte, >2500 = estremo) · LI = indice di sollevamento (negativo = instabile) · CIN = inibizione convettiva (frena i temporali anche con CAPE alto).<br>
+        <span style="color:var(--accent)">Zambretti usa solo dati Netatmo locali. Gli indici convettivi vengono dal modello ECMWF via Open-Meteo (gratuito, aggiornato ogni 15 min).</span>
       </div>
     </div>
   </div>
@@ -986,6 +1002,9 @@ function renderPrevisioni() {
     return `<div class="stat"><div class="stat-label">${w.label}</div><div class="stat-val" style="font-size:1rem;color:${color}">${arrow} ${sign}${w.delta} hPa</div></div>`;
   }).join('');
 
+  // Avvia fetch indici convettivi (async, non bloccante)
+  fetchAndRenderConvective();
+
   // ── Sparkline pressione SLP ultime 12h ──
   const cutoff12h = last => last.ts - 12 * 3600 * 1000;
   const withPress = (D.raw || []).filter(r => r.press != null);
@@ -1006,6 +1025,101 @@ function renderPrevisioni() {
       plugins:{ legend:{display:false} },
       scales:{ x:AXIS.x({xticks:{maxTicksLimit:8}}), y:AXIS.y(' hPa') },
     });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// TEMPORALI CONVETTIVI — Open-Meteo / ECMWF
+// ══════════════════════════════════════════════════════════════
+function convectiveRisk(cape, li, cin) {
+  let score = 0;
+  if      (cape > 2500) score += 3;
+  else if (cape > 1000) score += 2;
+  else if (cape > 300)  score += 1;
+  if      (li < -4) score += 3;
+  else if (li < -2) score += 2;
+  else if (li <  0) score += 1;
+  // CIN frena la convezione anche con CAPE alto
+  const cinAbs = Math.abs(cin);
+  if      (cinAbs > 100) score = Math.max(0, score - 2);
+  else if (cinAbs > 50)  score = Math.max(0, score - 1);
+
+  if (score >= 5) return { label:'Alto',     color:'var(--hot)',    icon:'⛈️',  bg:'#7f1d1d40', desc:'Condizioni favorevoli a temporali forti. Possibili grandine e forti raffiche.' };
+  if (score >= 3) return { label:'Moderato', color:'var(--orange)', icon:'🌩️', bg:'#78350f40', desc:'Temporali possibili, specie nelle ore più calde della giornata.' };
+  if (score >= 1) return { label:'Basso',    color:'var(--green)',  icon:'⛅',  bg:'#14532d40', desc:'Lieve instabilità. Temporali isolati non esclusi in caso di trigger locale.' };
+  return               { label:'Assente',   color:'var(--muted)',  icon:'☀️',  bg:'#1e293b',   desc:'Atmosfera stabile. Temporali convettivi molto improbabili.' };
+}
+
+async function fetchAndRenderConvective() {
+  const loadEl    = document.getElementById('conv-loading');
+  const contentEl = document.getElementById('conv-content');
+  const errorEl   = document.getElementById('conv-error');
+  loadEl.style.display    = '';
+  contentEl.style.display = 'none';
+  errorEl.style.display   = 'none';
+
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast' +
+      '?latitude=43.6&longitude=13.5' +
+      '&current=cape,lifted_index,convective_inhibition' +
+      '&hourly=precipitation_probability' +
+      '&forecast_days=1&timezone=Europe%2FRome';
+    const res  = await fetch(url);
+    const data = await res.json();
+
+    const cape = data.current.cape              ?? 0;
+    const li   = data.current.lifted_index      ?? 10;
+    const cin  = data.current.convective_inhibition ?? 0;
+
+    // Probabilità precipitazione nelle prossime 6 ore (ora locale italiana)
+    const localStr = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Rome' }).slice(0, 13) + ':00';
+    const idx = (data.hourly.time || []).indexOf(localStr);
+    const precProb6h = idx >= 0
+      ? data.hourly.precipitation_probability.slice(idx, idx + 6).filter(v => v !== null)
+      : [];
+    const maxProb6h = precProb6h.length ? Math.max(...precProb6h) : null;
+
+    const risk = convectiveRisk(cape, li, cin);
+
+    const capeColor = cape > 2500 ? 'var(--hot)' : cape > 1000 ? 'var(--orange)' : cape > 300 ? 'var(--green)' : 'var(--muted)';
+    const capeLabel = cape > 2500 ? 'Estremo' : cape > 1000 ? 'Forte' : cape > 300 ? 'Moderato' : 'Debole';
+    const liColor   = li < -4 ? 'var(--hot)' : li < -2 ? 'var(--orange)' : li < 0 ? 'var(--green)' : 'var(--muted)';
+    const liLabel   = li < -4 ? 'Molto instabile' : li < -2 ? 'Instabile' : li < 0 ? 'Leggermente instabile' : 'Stabile';
+    const cinAbs    = Math.abs(cin);
+    const cinColor  = cinAbs > 100 ? 'var(--green)' : cinAbs > 50 ? 'var(--muted)' : cinAbs > 25 ? 'var(--orange)' : 'var(--hot)';
+    const cinLabel  = cinAbs > 100 ? 'Forte inibizione' : cinAbs > 50 ? 'Inibizione moderata' : cinAbs > 25 ? 'Inibizione debole' : 'Nessuna inibizione';
+
+    const stats = [
+      { label:'CAPE', val: Math.round(cape) + ' J/kg', sub: capeLabel, color: capeColor },
+      { label:'LI',   val: li.toFixed(1),              sub: liLabel,   color: liColor   },
+      { label:'CIN',  val: Math.round(cin) + ' J/kg',  sub: cinLabel,  color: cinColor  },
+      ...(maxProb6h !== null ? [{
+        label:'Prob. pioggia 6h', val: maxProb6h + ' %', sub: 'prossime 6 ore',
+        color: maxProb6h >= 60 ? 'var(--hot)' : maxProb6h >= 30 ? 'var(--orange)' : 'var(--green)'
+      }] : []),
+    ];
+
+    document.getElementById('conv-grid').innerHTML = stats.map(s =>
+      `<div class="stat">
+        <div class="stat-label">${s.label}</div>
+        <div class="stat-val" style="font-size:1.05rem;color:${s.color}">${s.val}</div>
+        <div style="font-size:0.68rem;color:var(--muted);margin-top:3px">${s.sub}</div>
+      </div>`
+    ).join('');
+
+    const sumEl = document.getElementById('conv-summary');
+    sumEl.style.background = risk.bg;
+    document.getElementById('conv-icon').textContent = risk.icon;
+    const riskLbl = document.getElementById('conv-risk');
+    riskLbl.textContent  = 'Rischio temporali: ' + risk.label;
+    riskLbl.style.color  = risk.color;
+    document.getElementById('conv-desc').textContent = risk.desc;
+
+    loadEl.style.display    = 'none';
+    contentEl.style.display = '';
+  } catch(e) {
+    loadEl.style.display  = 'none';
+    errorEl.style.display = '';
   }
 }
 
