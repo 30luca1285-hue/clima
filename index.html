@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.1</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.2</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -279,9 +279,10 @@
     Attendi il prossimo aggiornamento automatico (ogni 10 min).
   </div>
   <div id="prev-content" style="display:none">
+    <div id="prev-alert" style="display:none;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-size:0.88rem;font-weight:600"></div>
     <div class="stats-grid" id="prev-grid"></div>
     <div class="card">
-      <div class="card-title">Previsione locale — basata su pressione, umidità e temperatura</div>
+      <div class="card-title">Previsione Zambretti — prossime 6–12 ore</div>
       <div id="prev-forecast" style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;padding:8px 0">
         <div id="prev-icon" style="font-size:4rem;line-height:1"></div>
         <div style="flex:1;min-width:200px">
@@ -298,7 +299,11 @@
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Tendenza pressione — ultime 6 ore (hPa)</div>
+      <div class="card-title">Variazione pressione SLP — multi-finestra</div>
+      <div id="prev-trend-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Pressione SLP — ultime 12 ore (hPa)</div>
       <div class="chart-wrap h200"><canvas id="c-prev-press"></canvas></div>
     </div>
     <div class="card">
@@ -321,11 +326,14 @@
 
     <div class="card">
       <div class="card-title">Come funziona la previsione</div>
-      <div style="color:var(--muted);font-size:0.82rem;line-height:1.8">
-        <b style="color:var(--text)">Tendenza pressione (3h):</b> &gt;+1.5 hPa = in aumento → miglioramento · &lt;−1.5 hPa = in calo → peggioramento · altrimenti stabile<br>
-        <b style="color:var(--text)">Livello assoluto:</b> &gt;1020 hPa = alta pressione (bel tempo) · 1000–1020 = variabile · &lt;1000 = bassa pressione (perturbato)<br>
-        <b style="color:var(--text)">Umidità:</b> sopra 80% con pressione in calo aumenta la probabilità di precipitazioni<br>
-        <span style="color:var(--accent)">Dati locali dalla stazione Netatmo — nessuna fonte esterna.</span>
+      <div style="color:var(--muted);font-size:0.82rem;line-height:1.9">
+        <b style="color:var(--text)">Algoritmo Zambretti (1920):</b> 26 categorie calibrate su pressione SLP e tendenza 3h — accuratezza ~90% per climi europei.<br>
+        <b style="color:var(--text)">Pressione SLP:</b> convertita a livello del mare dalla quota stazione (112 m s.l.m.). &gt;1020 hPa = alta · 1009–1020 = variabile · &lt;1009 = perturbato.<br>
+        <b style="color:var(--text)">Tendenza 3h:</b> &gt;+1.6 hPa = in aumento · &lt;−1.6 hPa = in calo · altrimenti stabile.<br>
+        <b style="color:var(--text)">Alert automatici:</b> calo &gt;3 hPa/3h = peggioramento rapido · &gt;6 hPa/3h = venti forti · &gt;10 hPa/3h = tempesta.<br>
+        <b style="color:var(--text)">Probabilità pioggia:</b> calcolata su 4 fattori — pressione assoluta, tendenza, umidità relativa, spread T–Td (punto di rugiada).<br>
+        <b style="color:var(--text)">Base nubi stimata:</b> ogni 1°C di spread T–Td corrisponde a ~125 m di base delle nubi.<br>
+        <span style="color:var(--accent)">Solo dati locali Netatmo — nessuna fonte esterna.</span>
       </div>
     </div>
   </div>
@@ -770,57 +778,141 @@ function renderPeriodo() {
 
 
 // ══════════════════════════════════════════════════════════════
-// PREVISIONI — regole barometriche classiche
+// PREVISIONI — Zambretti + regole barometriche + umidità/Td
 // ══════════════════════════════════════════════════════════════
+const ELEVATION_M = 112; // quota stazione (m s.l.m.)
+
+function toSLP(pressHPa, tempC) {
+  return pressHPa * Math.pow(
+    1 - (0.0065 * ELEVATION_M) / (tempC + 0.0065 * ELEVATION_M + 273.15),
+    -5.257
+  );
+}
+
+const ZAMBRETTI_TEXT = {
+  'A':'Tempo stabile e sereno','B':'Bel tempo','C':'In miglioramento',
+  'D':'Bello, poi meno stabile','E':'Bello, possibili rovesci',
+  'F':'Abbastanza bello, in miglioramento','G':'Abbastanza bello, rovesci mattutini',
+  'H':'Abbastanza bello, rovesci nel pomeriggio','I':'Rovesci mattutini, poi miglioramento',
+  'J':'Variabile, tendenza al bello','K':'Abbastanza bello, rovesci probabili',
+  'L':'Instabile, ma con schiarite','M':'Instabile, probabile miglioramento',
+  'N':'Rovesci con schiarite','O':'Rovesci, peggioramento in corso',
+  'P':'Variabile con qualche pioggia','Q':'Instabile, brevi schiarite',
+  'R':'Instabile, pioggia in arrivo','S':'Instabile con qualche pioggia',
+  'T':'Molto instabile','U':'Piogge occasionali, peggiora',
+  'V':'Piogge, molto instabile','W':'Piogge frequenti',
+  'X':'Pioggia, molto instabile','Y':'Tempestoso, possibile miglioramento',
+  'Z':'Tempestoso, molta pioggia'
+};
+
+const ZAMBRETTI_ICON = {
+  'A':'☀️','B':'🌤️','C':'🌤️','D':'⛅','E':'🌤️','F':'🌤️','G':'⛅',
+  'H':'⛅','I':'🌦️','J':'🌦️','K':'⛅','L':'🌦️','M':'🌦️','N':'🌦️',
+  'O':'🌧️','P':'🌧️','Q':'🌧️','R':'🌧️','S':'🌧️','T':'🌧️',
+  'U':'🌧️','V':'🌧️','W':'🌧️','X':'⛈️','Y':'⛈️','Z':'⛈️'
+};
+
+function zambrettiCode(slp, trend, month) {
+  const p = Math.max(950, Math.min(1050, slp));
+  const isSummer = month >= 4 && month <= 9;
+  let F, table;
+  if (trend === 'rising') {
+    F = 0.1740 * (1031.40 - p);
+    if (isSummer) F -= 1;
+    table = ['A','B','B','C','F','G','I','J','L','M','M','Q','T','Y'];
+  } else if (trend === 'falling') {
+    F = 0.1553 * (1029.95 - p);
+    if (!isSummer) F += 1;
+    table = ['B','D','H','O','R','U','V','X','X','Z'];
+  } else {
+    F = 0.2314 * (1030.81 - p);
+    table = ['A','B','B','B','E','K','N','N','P','P','S','W','W','X','X','X','Z'];
+  }
+  const idx = Math.min(Math.max(Math.round(F), 0), table.length - 1);
+  return table[idx];
+}
+
 function calcForecast(raw) {
   const withPress = raw.filter(r => r.press != null);
   if (!withPress.length) return null;
 
-  const last     = withPress[withPress.length - 1];
-  const pressNow = last.press;
-  const humNow   = last.h;
+  const last    = withPress[withPress.length - 1];
+  const tempNow = last.t;
+  const humNow  = last.h;
+  const slpNow  = toSLP(last.press, tempNow);
 
-  // Tendenza ultime 3h + velocità hPa/h
-  const cutoff3h  = Date.now() - 3 * 3600 * 1000;
-  const press3h   = withPress.filter(r => r.ts >= cutoff3h);
-  const trend3h   = press3h.length >= 2
-    ? press3h[press3h.length - 1].press - press3h[0].press : 0;
-  const rateHour  = press3h.length >= 2
-    ? trend3h / ((press3h[press3h.length-1].ts - press3h[0].ts) / 3600000) : 0;
+  // Trova il punto più vicino a N ms fa (tolleranza 20 min)
+  function getSLP(msAgo) {
+    const target = last.ts - msAgo;
+    const tol    = 20 * 60 * 1000;
+    let best = null, bestDiff = Infinity;
+    for (const r of withPress) {
+      const diff = Math.abs(r.ts - target);
+      if (diff < bestDiff && diff < tol) { bestDiff = diff; best = r; }
+    }
+    return best ? toSLP(best.press, best.t || tempNow) : null;
+  }
 
-  let tendency, tendencyLabel, tendencyColor;
-  if      (rateHour >  0.5) { tendency = 'rising';  tendencyLabel = '↑ ' + (rateHour > 0 ? '+' : '') + rateHour.toFixed(1) + ' hPa/h'; tendencyColor = 'var(--green)';  }
-  else if (rateHour < -0.5) { tendency = 'falling'; tendencyLabel = '↓ ' + rateHour.toFixed(1) + ' hPa/h'; tendencyColor = 'var(--hot)';    }
-  else                       { tendency = 'stable';  tendencyLabel = '→ ' + (rateHour >= 0 ? '+' : '') + rateHour.toFixed(1) + ' hPa/h'; tendencyColor = 'var(--muted)'; }
+  const slp1h  = getSLP(1 * 3600000);
+  const slp3h  = getSLP(3 * 3600000);
+  const slp6h  = getSLP(6 * 3600000);
+  const slp12h = getSLP(12 * 3600000);
 
-  const level   = pressNow > 1020 ? 'high' : pressNow > 1000 ? 'medium' : 'low';
-  const highHum = humNow > 80;
+  const d1h  = slp1h  !== null ? +(slpNow - slp1h ).toFixed(1) : null;
+  const d3h  = slp3h  !== null ? +(slpNow - slp3h ).toFixed(1) : null;
+  const d6h  = slp6h  !== null ? +(slpNow - slp6h ).toFixed(1) : null;
+  const d12h = slp12h !== null ? +(slpNow - slp12h).toFixed(1) : null;
 
-  // Probabilità pioggia 0-100%
-  const dpNow  = dewPt(last.t, last.h);
-  const dpDep  = last.t - dpNow;  // escursione punto di rugiada
-  let rainProb = 0;
-  rainProb += pressNow < 1000 ? 40 : pressNow < 1005 ? 30 : pressNow < 1010 ? 18 : pressNow < 1015 ? 8 : pressNow < 1020 ? 3 : 0;
-  rainProb += rateHour < -3 ? 30 : rateHour < -2 ? 20 : rateHour < -1 ? 12 : rateHour < -0.3 ? 5 : 0;
-  rainProb += humNow > 90 ? 20 : humNow > 82 ? 12 : humNow > 75 ? 6 : 0;
-  rainProb += dpDep < 2 ? 10 : dpDep < 4 ? 6 : dpDep < 7 ? 2 : 0;
-  rainProb = Math.min(Math.round(rainProb), 100);
+  // Tendenza principale su 3h (soglia Zambretti: ±1.6 hPa)
+  const delta = d3h !== null ? d3h : (d1h !== null ? d1h * 3 : 0);
+  const trend  = delta > 1.6 ? 'rising' : delta < -1.6 ? 'falling' : 'steady';
+  const rateH  = d3h !== null ? d3h / 3 : (d1h || 0);
 
-  // Matrice previsione
-  const matrix = {
-    high:   { rising:  ['☀️',  'Bel tempo stabile',       'Alta pressione in aumento. Condizioni soleggiate attese nelle prossime 24 ore.'],
-              stable:  ['🌤️', 'Bel tempo',               'Alta pressione stabile. Tempo sereno o poco nuvoloso.'],
-              falling: ['⛅',  'Variabilità in arrivo',   'Pressione in calo da valori alti. Possibile aumento della nuvolosità nelle prossime ore.'] },
-    medium: { rising:  ['🌤️', 'Miglioramento probabile', 'Pressione in aumento verso valori favorevoli. Miglioramento atteso.'],
-              stable:  ['⛅',  'Tempo variabile',         'Pressione nella norma. Condizioni variabili' + (highHum ? ', umidità elevata: nebbia o nubi basse possibili.' : '.')],
-              falling: ['🌧️', 'Peggioramento in corso',  'Pressione in calo. Probabile aumento della nuvolosità e precipitazioni' + (highHum ? ' — umidità elevata, pioggia molto probabile.' : '.')] },
-    low:    { rising:  ['⛅',  'Lento miglioramento',     'Bassa pressione in aumento. Condizioni ancora instabili ma in graduale miglioramento.'],
-              stable:  ['🌧️', 'Tempo perturbato',        'Bassa pressione stabile. Condizioni perturbate con precipitazioni probabili.'],
-              falling: ['⛈️', 'Forte perturbazione',     'Bassa pressione in ulteriore calo. Condizioni molto instabili, possibili temporali.'] },
-  };
+  // Zambretti
+  const month = new Date().getMonth() + 1;
+  const zCode = zambrettiCode(slpNow, trend, month);
 
-  const [icon, title, desc] = matrix[level][tendency];
-  return { pressNow, rateHour, rainProb, tendency, tendencyLabel, tendencyColor, level, humNow, icon, title, desc };
+  // Alert automatici per eventi estremi
+  let alert = null;
+  if (d3h !== null) {
+    if      (d3h <= -10)                   alert = { level:'danger',  msg:'⚠️ Caduta estrema — tempesta/burrasca imminente' };
+    else if (d3h <= -6)                    alert = { level:'danger',  msg:'⚠️ Calo rapido — venti forti probabili' };
+    else if (d3h <= -3 && slpNow < 1009)   alert = { level:'warning', msg:'⚡ Rischio temporale — bassa pressione in forte calo' };
+    else if (d3h <= -3)                    alert = { level:'warning', msg:'⚠️ Peggioramento rapido in corso' };
+    else if (d3h >= 6)                     alert = { level:'info',    msg:'ℹ️ Miglioramento rapido — possibili raffiche temporanee' };
+  } else if (d1h !== null && d1h <= -2) {
+    alert = { level:'warning', msg:"⚠️ Calo rapido nell'ultima ora — monitora" };
+  }
+  // V-shape: fronte passato → miglioramento in atto
+  if (!alert && d3h !== null && d6h !== null && d3h > 1.5 && d6h < -1.5) {
+    alert = { level:'info', msg:'ℹ️ Fronte probabilmente passato — miglioramento in atto' };
+  }
+
+  // Punto di rugiada (Magnus) e spread T-Td
+  const a = 17.625, b = 243.04;
+  const alpha  = Math.log(humNow / 100) + (a * tempNow) / (b + tempNow);
+  const td     = +(b * alpha / (a - alpha)).toFixed(1);
+  const spread = +(tempNow - td).toFixed(1);
+  const cloudBaseM = Math.max(0, Math.round(spread * 125));
+
+  // Probabilità pioggia — 4 fattori ponderati (max 12 punti → 100%)
+  let rs = 0;
+  rs += slpNow < 995 ? 3 : slpNow < 1005 ? 2 : slpNow < 1013 ? 1 : 0;
+  rs += (d3h||0) < -6 ? 3 : (d3h||0) < -3 ? 2 : (d3h||0) < -1.6 ? 1 : 0;
+  rs += humNow > 90 ? 3 : humNow > 80 ? 2 : humNow > 70 ? 1 : 0;
+  rs += spread < 1 ? 3 : spread < 2 ? 2 : spread < 4 ? 1 : 0;
+  const rainProb = Math.min(Math.round((rs / 12) * 100), 100);
+
+  // Label tendenza
+  const sign = rateH >= 0 ? '+' : '';
+  const tendencyLabel = trend === 'rising'  ? `↑ +${rateH.toFixed(1)} hPa/h`
+                      : trend === 'falling' ? `↓ ${rateH.toFixed(1)} hPa/h`
+                      :                      `→ ${sign}${rateH.toFixed(1)} hPa/h`;
+  const tendencyColor = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--hot)' : 'var(--muted)';
+
+  return { slpNow:+slpNow.toFixed(1), tempNow, humNow, trend, rateH,
+           tendencyLabel, tendencyColor, d1h, d3h, d6h, d12h,
+           zCode, alert, td, spread, cloudBaseM, rainProb };
 }
 
 function renderPrevisioni() {
@@ -828,52 +920,91 @@ function renderPrevisioni() {
   const fc  = calcForecast(raw);
 
   if (!fc) {
-    document.getElementById('prev-nodata').style.display   = '';
-    document.getElementById('prev-content').style.display  = 'none';
+    document.getElementById('prev-nodata').style.display  = '';
+    document.getElementById('prev-content').style.display = 'none';
     return;
   }
   document.getElementById('prev-nodata').style.display  = 'none';
   document.getElementById('prev-content').style.display = '';
 
-  // Stats grid
-  const levelLabel = { high: 'Alta (>1020)', medium: 'Normale', low: 'Bassa (<1000)' }[fc.level];
-  const levelColor = { high: 'var(--green)', medium: 'var(--orange)', low: 'var(--hot)' }[fc.level];
+  // ── Alert banner ──
+  const alertEl = document.getElementById('prev-alert');
+  if (fc.alert) {
+    const bg = fc.alert.level === 'danger'  ? '#7f1d1d'
+             : fc.alert.level === 'warning' ? '#78350f' : '#1e3a5f';
+    alertEl.style.cssText = `display:block;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-size:0.88rem;font-weight:600;background:${bg};color:#fff`;
+    alertEl.textContent = fc.alert.msg;
+  } else {
+    alertEl.style.display = 'none';
+  }
+
+  // ── Stats grid (6 indicatori) ──
+  const slpColor   = fc.slpNow > 1020 ? 'var(--green)' : fc.slpNow > 1009 ? 'var(--orange)' : 'var(--hot)';
   const rainColor  = fc.rainProb >= 60 ? 'var(--hot)' : fc.rainProb >= 30 ? 'var(--orange)' : 'var(--green)';
+  const humColor   = fc.humNow > 80 ? 'var(--orange)' : 'var(--green)';
+  const spreadColor = fc.spread < 2 ? 'var(--hot)' : fc.spread < 4 ? 'var(--orange)' : 'var(--muted)';
   const stats = [
-    { label: 'Pressione',      val: fc.pressNow.toFixed(1) + ' hPa',  color: levelColor },
-    { label: 'Variazione',     val: fc.tendencyLabel,                   color: fc.tendencyColor },
-    { label: 'Prob. pioggia',  val: fc.rainProb + ' %',                color: rainColor },
-    { label: 'Umidità',        val: fc.humNow.toFixed(0) + ' %',       color: fc.humNow > 80 ? 'var(--orange)' : 'var(--green)' },
+    { label:'Pressione SLP',    val: fc.slpNow + ' hPa',           color: slpColor },
+    { label:'Variazione 3h',    val: fc.tendencyLabel,              color: fc.tendencyColor },
+    { label:'Prob. pioggia',    val: fc.rainProb + ' %',            color: rainColor },
+    { label:'Umidità',          val: fc.humNow.toFixed(0) + ' %',   color: humColor },
+    { label:'Punto di rugiada', val: fc.td + ' °C',                 color: 'var(--purple)' },
+    { label:'Base nubi est.',   val: fc.cloudBaseM > 0 ? fc.cloudBaseM + ' m' : '< 50 m', color: spreadColor },
   ];
   document.getElementById('prev-grid').innerHTML = stats.map(s =>
-    `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-val" style="font-size:1.1rem;color:${s.color}">${s.val}</div></div>`
+    `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-val" style="font-size:1.05rem;color:${s.color}">${s.val}</div></div>`
   ).join('');
 
-  // Forecast card
-  document.getElementById('prev-icon').textContent  = fc.icon;
-  document.getElementById('prev-title').textContent = fc.title;
-  document.getElementById('prev-desc').textContent  = fc.desc;
+  // ── Forecast card (Zambretti) ──
+  document.getElementById('prev-icon').textContent  = ZAMBRETTI_ICON[fc.zCode];
+  document.getElementById('prev-title').textContent = `[${fc.zCode}] ${ZAMBRETTI_TEXT[fc.zCode]}`;
   document.getElementById('prev-rain-pct').textContent = fc.rainProb + '%';
   const bar = document.getElementById('prev-rain-bar');
-  bar.style.width = fc.rainProb + '%';
+  bar.style.width      = fc.rainProb + '%';
   bar.style.background = fc.rainProb >= 60 ? 'var(--hot)' : fc.rainProb >= 30 ? 'var(--orange)' : 'var(--green)';
 
-  // Sparkline pressione ultime 6h
-  const cutoff6h   = Date.now() - 6 * 3600 * 1000;
-  const press6h    = (D.raw || []).filter(r => r.ts >= cutoff6h && r.press != null);
-  if (press6h.length >= 2) {
-    const lbls = press6h.map(r => {
+  // Descrizione arricchita con indicatori aggiuntivi
+  const descParts = [];
+  if (fc.spread < 2)                             descParts.push(`Aria quasi satura (spread T–Td: ${fc.spread}°C) — nebbia o pioggia fine possibile.`);
+  if (fc.humNow > 85 && fc.trend === 'falling')  descParts.push('Umidità elevata con pressione in calo: precipitazioni probabili nelle prossime ore.');
+  if (fc.cloudBaseM > 0 && fc.cloudBaseM < 300)  descParts.push(`Base nubi molto bassa (${fc.cloudBaseM} m).`);
+  if (!descParts.length)                          descParts.push('Nessuna condizione anomala rilevata.');
+  document.getElementById('prev-desc').textContent = descParts.join(' ');
+
+  // ── Trend multi-finestra ──
+  const trendWindows = [
+    { label:'Ultima ora',    delta: fc.d1h },
+    { label:'Ultime 3 ore',  delta: fc.d3h },
+    { label:'Ultime 6 ore',  delta: fc.d6h },
+    { label:'Ultime 12 ore', delta: fc.d12h },
+  ];
+  document.getElementById('prev-trend-grid').innerHTML = trendWindows.map(w => {
+    if (w.delta === null) return `<div class="stat"><div class="stat-label">${w.label}</div><div class="stat-val" style="font-size:1rem;color:var(--muted)">—</div></div>`;
+    const sign  = w.delta >= 0 ? '+' : '';
+    const color = w.delta > 1 ? 'var(--green)' : w.delta < -1 ? 'var(--hot)' : 'var(--muted)';
+    const arrow = w.delta > 1 ? '↑' : w.delta < -1 ? '↓' : '→';
+    return `<div class="stat"><div class="stat-label">${w.label}</div><div class="stat-val" style="font-size:1rem;color:${color}">${arrow} ${sign}${w.delta} hPa</div></div>`;
+  }).join('');
+
+  // ── Sparkline pressione SLP ultime 12h ──
+  const cutoff12h = last => last.ts - 12 * 3600 * 1000;
+  const withPress = (D.raw || []).filter(r => r.press != null);
+  const lastR     = withPress[withPress.length - 1];
+  const press12h  = lastR ? withPress.filter(r => r.ts >= lastR.ts - 12 * 3600 * 1000) : [];
+  if (press12h.length >= 2) {
+    const slpSeries = press12h.map(r => +toSLP(r.press, r.t || 15).toFixed(1));
+    const lbls = press12h.map(r => {
       const d = new Date(r.ts);
       return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
     });
     mkChart('c-prev-press','line',{ labels: lbls, datasets:[
-      { label:'Pressione hPa', data: press6h.map(r => r.press),
+      { label:'Pressione SLP hPa', data: slpSeries,
         borderColor:'#a855f7', backgroundColor:'#a855f718',
-        fill:true, tension:0.3, pointRadius:2, borderWidth:2 },
+        fill:true, tension:0.3, pointRadius:0, borderWidth:2 },
     ]},{
       ...CHART_DEFAULTS,
       plugins:{ legend:{display:false} },
-      scales:{ x:AXIS.x({xticks:{maxTicksLimit:6}}), y:AXIS.y(' hPa') },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:8}}), y:AXIS.y(' hPa') },
     });
   }
 }

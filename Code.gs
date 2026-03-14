@@ -371,9 +371,10 @@ function fetchAndSaveData() {
                        : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
                     : 0;
     if (rainMod) {
+      const rd = rainMod.dashboard_data;
       Logger.log('NAModule3 trovato: ' + (rainMod.module_name || rainMod._id) +
-                 ' | sum_rain_1=' + rainMod.dashboard_data.sum_rain_1 +
-                 ' Rain=' + rainMod.dashboard_data.Rain + ' mm | reachable=' + rainMod.reachable);
+                 ' | sum_rain_1=' + (rd ? rd.sum_rain_1 : 'N/A (no dashboard_data)') +
+                 ' Rain=' + (rd ? rd.Rain : 'N/A') + ' mm | reachable=' + rainMod.reachable);
     } else {
       const tipi = device.modules.map(m => m.type).join(', ');
       Logger.log('NAModule3 NON trovato. Moduli presenti: ' + tipi);
