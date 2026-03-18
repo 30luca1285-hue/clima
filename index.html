@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.4</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.5</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -282,15 +282,15 @@
     <div id="prev-alert" style="display:none;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-size:0.88rem;font-weight:600"></div>
     <div class="stats-grid" id="prev-grid"></div>
     <div class="card">
-      <div class="card-title">Previsione Zambretti — prossime 6–12 ore</div>
-      <div id="prev-forecast" style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;padding:8px 0">
-        <div id="prev-icon" style="font-size:4rem;line-height:1"></div>
+      <div class="card-title">🔍 Adesso — prossime 2–3 ore (dati Netatmo)</div>
+      <div id="now-forecast" style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;padding:8px 0">
+        <div id="now-icon" style="font-size:4rem;line-height:1"></div>
         <div style="flex:1;min-width:200px">
-          <div id="prev-title" style="font-size:1.3rem;font-weight:700;margin-bottom:8px"></div>
-          <div id="prev-desc"  style="color:var(--muted);font-size:0.9rem;max-width:500px;line-height:1.6"></div>
+          <div id="now-title" style="font-size:1.3rem;font-weight:700;margin-bottom:8px"></div>
+          <div id="now-desc"  style="color:var(--muted);font-size:0.9rem;max-width:500px;line-height:1.6"></div>
           <div style="margin-top:14px;max-width:320px">
             <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:var(--muted);margin-bottom:4px">
-              <span>Probabilità pioggia</span>
+              <span>Probabilità pioggia (sensore locale)</span>
               <span id="prev-rain-pct" style="font-weight:700;color:var(--text)"></span>
             </div>
             <div class="rain-bar-bg"><div id="prev-rain-bar" class="rain-bar-fg"></div></div>
@@ -301,6 +301,14 @@
     <div class="card">
       <div class="card-title">Variazione pressione SLP — multi-finestra</div>
       <div id="prev-trend-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px"></div>
+    </div>
+    <div class="card" id="card-ecmwf">
+      <div class="card-title">📡 Previsione ECMWF — prossime 12 ore (Open-Meteo)</div>
+      <div id="ecmwf-loading" style="color:var(--muted);font-size:0.82rem;padding:8px 0">Caricamento previsioni...</div>
+      <div id="ecmwf-content" style="display:none">
+        <div id="hourly-strip" style="display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px"></div>
+      </div>
+      <div id="ecmwf-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Previsioni non disponibili (controlla la connessione).</div>
     </div>
     <div class="card" id="card-convective">
       <div class="card-title">⛈️ Temporali convettivi — indici in quota (Open-Meteo / ECMWF)</div>
@@ -805,47 +813,42 @@ function toSLP(pressHPa, tempC) {
   );
 }
 
-const ZAMBRETTI_TEXT = {
-  'A':'Tempo stabile e sereno','B':'Bel tempo','C':'In miglioramento',
-  'D':'Bello, poi meno stabile','E':'Bello, possibili rovesci',
-  'F':'Abbastanza bello, in miglioramento','G':'Abbastanza bello, rovesci mattutini',
-  'H':'Abbastanza bello, rovesci nel pomeriggio','I':'Rovesci mattutini, poi miglioramento',
-  'J':'Variabile, tendenza al bello','K':'Abbastanza bello, rovesci probabili',
-  'L':'Instabile, ma con schiarite','M':'Instabile, probabile miglioramento',
-  'N':'Rovesci con schiarite','O':'Rovesci, peggioramento in corso',
-  'P':'Variabile con qualche pioggia','Q':'Instabile, brevi schiarite',
-  'R':'Instabile, pioggia in arrivo','S':'Instabile con qualche pioggia',
-  'T':'Molto instabile','U':'Piogge occasionali, peggiora',
-  'V':'Piogge, molto instabile','W':'Piogge frequenti',
-  'X':'Pioggia, molto instabile','Y':'Tempestoso, possibile miglioramento',
-  'Z':'Tempestoso, molta pioggia'
-};
+function calcNowcast(fc) {
+  const { isRaining, d1h, d3h, d6h, slpNow, humNow, spread, trend } = fc;
 
-const ZAMBRETTI_ICON = {
-  'A':'☀️','B':'🌤️','C':'🌤️','D':'⛅','E':'🌤️','F':'🌤️','G':'⛅',
-  'H':'⛅','I':'🌦️','J':'🌦️','K':'⛅','L':'🌦️','M':'🌦️','N':'🌦️',
-  'O':'🌧️','P':'🌧️','Q':'🌧️','R':'🌧️','S':'🌧️','T':'🌧️',
-  'U':'🌧️','V':'🌧️','W':'🌧️','X':'⛈️','Y':'⛈️','Z':'⛈️'
-};
-
-function zambrettiCode(slp, trend, month) {
-  const p = Math.max(950, Math.min(1050, slp));
-  const isSummer = month >= 4 && month <= 9;
-  let F, table;
-  if (trend === 'rising') {
-    F = 0.1740 * (1031.40 - p);
-    if (isSummer) F -= 1;
-    table = ['A','B','B','C','F','G','I','J','L','M','M','Q','T','Y'];
-  } else if (trend === 'falling') {
-    F = 0.1553 * (1029.95 - p);
-    if (!isSummer) F += 1;
-    table = ['B','D','H','O','R','U','V','X','X','Z'];
-  } else {
-    F = 0.2314 * (1030.81 - p);
-    table = ['A','B','B','B','E','K','N','N','P','P','S','W','W','X','X','X','Z'];
+  if (isRaining) {
+    if (trend === 'rising')
+      return { icon:'🌦️', title:'Pioggia in corso — tendenza al miglioramento', desc:`La pressione è in risalita: le precipitazioni potrebbero attenuarsi nelle prossime ore.`, color:'var(--blue)' };
+    if (trend === 'falling')
+      return { icon:'🌧️', title:'Pioggia in corso — possibile peggioramento', desc:`La pressione continua a calare: le precipitazioni potrebbero persistere o intensificarsi.`, color:'var(--hot)' };
+    return   { icon:'🌧️', title:'Pioggia in corso', desc:`Pressione stabile: condizioni invariate nelle prossime ore.`, color:'var(--blue)' };
   }
-  const idx = Math.min(Math.max(Math.round(F), 0), table.length - 1);
-  return table[idx];
+
+  if (d1h !== null && d1h <= -3)
+    return { icon:'⛈️', title:'Peggioramento rapido in atto', desc:`Calo di ${Math.abs(d1h)} hPa nell'ultima ora. Precipitazioni molto probabili a breve.`, color:'var(--hot)' };
+
+  if (d3h !== null && d3h <= -4)
+    return { icon:'🌧️', title:'Peggioramento in corso', desc:`Calo di ${Math.abs(d3h)} hPa nelle ultime 3 ore. Possibili precipitazioni nelle prossime ore.`, color:'var(--orange)' };
+
+  if (d1h !== null && d1h <= -2)
+    return { icon:'⬇️', title:'Pressione in calo — monitorare', desc:`Calo di ${Math.abs(d1h)} hPa nell'ultima ora. Situazione in evoluzione, possibile peggioramento.`, color:'var(--orange)' };
+
+  if (spread !== null && spread <= 1 && humNow >= 90)
+    return { icon:'🌫️', title:'Nebbia o pioggia fine probabile', desc:`Aria quasi satura (spread T–Td ${spread}°C, umidità ${humNow}%). Alta probabilità di nebbia o pioviggine.`, color:'var(--muted)' };
+
+  if (spread !== null && spread <= 2 && humNow >= 85)
+    return { icon:'🌦️', title:'Aria umida, attenzione a nebbia', desc:`Spread T–Td basso (${spread}°C) con umidità elevata (${humNow}%). Nebbia o pioggia fine possibile.`, color:'var(--blue)' };
+
+  if (d1h !== null && d1h >= 2 && d6h !== null && d6h < -2)
+    return { icon:'🌤️', title:'Fronte in transito — miglioramento atteso', desc:`La pressione sta risalendo dopo un calo: il fronte sta passando, condizioni in miglioramento.`, color:'var(--green)' };
+
+  if (slpNow >= 1018 && trend === 'steady')
+    return { icon:'☀️', title:'Tempo stabile', desc:`Alta pressione (${slpNow} hPa) stabile. Condizioni favorevoli previste per le prossime ore.`, color:'var(--green)' };
+
+  if (trend === 'rising' && slpNow > 1008)
+    return { icon:'🌤️', title:'In miglioramento', desc:`Pressione in risalita (${slpNow} hPa): miglioramento atteso nelle prossime ore.`, color:'var(--green)' };
+
+  return { icon:'⛅', title:'Situazione variabile', desc:`Nessun segnale netto di cambiamento. Monitorare la pressione nelle prossime ore.`, color:'var(--muted)' };
 }
 
 function calcForecast(raw) {
@@ -895,10 +898,6 @@ function calcForecast(raw) {
   // Pioggia attualmente rilevata dal sensore (sum_rain_1 nell'ultimo punto)
   const isRaining = (last.p || 0) > 0.1;
 
-  // Zambretti
-  const month = new Date().getMonth() + 1;
-  const zCode = zambrettiCode(slpNow, trend, month);
-
   // Alert automatici per eventi estremi
   let alert = null;
   if (d3h !== null) {
@@ -946,7 +945,7 @@ function calcForecast(raw) {
 
   return { slpNow:+slpNow.toFixed(1), tempNow, humNow, trend, rateH,
            tendencyLabel, tendencyColor, d1h, d3h, d6h, d12h,
-           zCode, alert, td, spread, cloudBaseM, rainProb, isRaining };
+           alert, td, spread, cloudBaseM, rainProb, isRaining };
 }
 
 function renderPrevisioni() {
@@ -989,22 +988,16 @@ function renderPrevisioni() {
     `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-val" style="font-size:1.05rem;color:${s.color}">${s.val}</div></div>`
   ).join('');
 
-  // ── Forecast card (Zambretti) ──
-  document.getElementById('prev-icon').textContent  = ZAMBRETTI_ICON[fc.zCode];
-  document.getElementById('prev-title').textContent = `[${fc.zCode}] ${ZAMBRETTI_TEXT[fc.zCode]}`;
+  // ── Nowcast card ──
+  const now = calcNowcast(fc);
+  document.getElementById('now-icon').textContent  = now.icon;
+  document.getElementById('now-title').style.color = now.color;
+  document.getElementById('now-title').textContent = now.title;
+  document.getElementById('now-desc').textContent  = now.desc;
   document.getElementById('prev-rain-pct').textContent = fc.rainProb + '%';
   const bar = document.getElementById('prev-rain-bar');
   bar.style.width      = fc.rainProb + '%';
   bar.style.background = fc.rainProb >= 60 ? 'var(--hot)' : fc.rainProb >= 30 ? 'var(--orange)' : 'var(--green)';
-
-  // Descrizione arricchita con indicatori aggiuntivi
-  const descParts = [];
-  if (fc.isRaining)                              descParts.push('Pioggia rilevata dal sensore Netatmo.');
-  if (fc.spread < 2)                             descParts.push(`Aria quasi satura (spread T–Td: ${fc.spread}°C) — nebbia o pioggia fine possibile.`);
-  if (fc.humNow > 85 && fc.trend === 'falling')  descParts.push('Umidità elevata con pressione in calo: precipitazioni probabili nelle prossime ore.');
-  if (fc.cloudBaseM > 0 && fc.cloudBaseM < 300)  descParts.push(`Base nubi molto bassa (${fc.cloudBaseM} m).`);
-  if (!descParts.length)                          descParts.push('Nessuna condizione anomala rilevata.');
-  document.getElementById('prev-desc').textContent = descParts.join(' ');
 
   // ── Trend multi-finestra ──
   const trendWindows = [
@@ -1069,20 +1062,40 @@ function convectiveRisk(cape, li, cin) {
   return               { label:'Assente',   color:'var(--muted)',  icon:'☀️',  bg:'#1e293b',   desc:'Atmosfera stabile. Temporali convettivi molto improbabili.' };
 }
 
+function wmoIcon(code) {
+  if (code === 0)          return '☀️';
+  if (code <= 2)           return '🌤️';
+  if (code === 3)          return '☁️';
+  if (code <= 48)          return '🌫️';
+  if (code <= 55)          return '🌦️';
+  if (code <= 67)          return '🌧️';
+  if (code <= 77)          return '🌨️';
+  if (code <= 82)          return '🌦️';
+  if (code <= 86)          return '🌨️';
+  if (code >= 95)          return '⛈️';
+  return '⛅';
+}
+
 async function fetchAndRenderConvective() {
   const loadEl    = document.getElementById('conv-loading');
   const contentEl = document.getElementById('conv-content');
   const errorEl   = document.getElementById('conv-error');
+  const ecmwfLoad = document.getElementById('ecmwf-loading');
+  const ecmwfCont = document.getElementById('ecmwf-content');
+  const ecmwfErr  = document.getElementById('ecmwf-error');
   loadEl.style.display    = '';
   contentEl.style.display = 'none';
   errorEl.style.display   = 'none';
+  ecmwfLoad.style.display = '';
+  ecmwfCont.style.display = 'none';
+  ecmwfErr.style.display  = 'none';
 
   try {
     const url = 'https://api.open-meteo.com/v1/forecast' +
       '?latitude=43.6&longitude=13.5' +
       '&current=cape,lifted_index,convective_inhibition' +
-      '&hourly=precipitation_probability' +
-      '&forecast_days=1&timezone=Europe%2FRome';
+      '&hourly=precipitation_probability,weather_code,temperature_2m,precipitation' +
+      '&forecast_days=2&timezone=Europe%2FRome';
     const res  = await fetch(url);
     const data = await res.json();
 
@@ -1090,9 +1103,40 @@ async function fetchAndRenderConvective() {
     const li   = data.current.lifted_index      ?? 10;
     const cin  = data.current.convective_inhibition ?? 0;
 
-    // Probabilità precipitazione nelle prossime 6 ore (ora locale italiana)
+    // Ora locale italiana come stringa "YYYY-MM-DDTHH:00"
     const localStr = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Rome' }).slice(0, 13) + ':00';
     const idx = (data.hourly.time || []).indexOf(localStr);
+
+    // ── Strip oraria: prossime 12 ore ──
+    if (idx >= 0) {
+      const strip = document.getElementById('hourly-strip');
+      const slots = data.hourly.time.slice(idx, idx + 13);
+      const probs = data.hourly.precipitation_probability.slice(idx, idx + 13);
+      const codes = data.hourly.weather_code.slice(idx, idx + 13);
+      const temps = data.hourly.temperature_2m.slice(idx, idx + 13);
+
+      strip.innerHTML = slots.map((t, i) => {
+        const hh     = t.slice(11, 16);
+        const icon   = wmoIcon(codes[i] ?? 0);
+        const temp   = temps[i] !== null ? Math.round(temps[i]) + '°' : '—';
+        const prob   = probs[i] !== null ? probs[i] + '%' : '—';
+        const probColor = (probs[i] ?? 0) >= 60 ? 'var(--hot)' : (probs[i] ?? 0) >= 30 ? 'var(--orange)' : 'var(--muted)';
+        const isNow  = i === 0;
+        return `<div style="text-align:center;min-width:58px;padding:10px 6px;background:${isNow ? '#2d3f55' : 'var(--card)'};border:1px solid var(--border);border-radius:10px;flex-shrink:0">
+          <div style="font-size:0.70rem;color:${isNow ? 'var(--text)' : 'var(--muted)'};font-weight:${isNow ? '700' : '400'}">${isNow ? 'ora' : hh}</div>
+          <div style="font-size:1.5rem;margin:4px 0;line-height:1">${icon}</div>
+          <div style="font-size:0.85rem;font-weight:600">${temp}</div>
+          <div style="font-size:0.72rem;color:${probColor}">${prob}</div>
+        </div>`;
+      }).join('');
+      ecmwfLoad.style.display = 'none';
+      ecmwfCont.style.display = '';
+    } else {
+      ecmwfLoad.style.display = 'none';
+      ecmwfErr.style.display  = '';
+    }
+
+    // Probabilità precipitazione nelle prossime 6 ore
     const precProb6h = idx >= 0
       ? data.hourly.precipitation_probability.slice(idx, idx + 6).filter(v => v !== null)
       : [];
@@ -1137,8 +1181,10 @@ async function fetchAndRenderConvective() {
     loadEl.style.display    = 'none';
     contentEl.style.display = '';
   } catch(e) {
-    loadEl.style.display  = 'none';
-    errorEl.style.display = '';
+    loadEl.style.display    = 'none';
+    errorEl.style.display   = '';
+    ecmwfLoad.style.display = 'none';
+    ecmwfErr.style.display  = '';
   }
 }
 
