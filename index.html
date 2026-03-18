@@ -1104,7 +1104,8 @@ async function fetchAndRenderConvective() {
     const cin  = data.current.convective_inhibition ?? 0;
 
     // Ora locale italiana come stringa "YYYY-MM-DDTHH:00"
-    const localStr = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Rome' }).slice(0, 13) + ':00';
+    const localStr = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Rome' }).slice(0, 10) + 'T' +
+                     new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Rome' }).slice(11, 13) + ':00';
     const idx = (data.hourly.time || []).indexOf(localStr);
 
     // ── Strip oraria: prossime 12 ore ──
