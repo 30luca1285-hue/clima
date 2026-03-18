@@ -120,11 +120,69 @@ function doGet(e) {
   );
 }
 
+// Restituisce mappa { 'YYYY-MM-DD': mm } con i totali giornalieri esatti
+// da Netatmo getmeasure scale=1day, con cache di 1 ora.
+function getRainDailyMap(deviceId, now) {
+  const cache    = CacheService.getScriptCache();
+  const cacheKey = 'rain_daily_map';
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch(_) {}
+
+  const props        = PropertiesService.getScriptProperties();
+  const rainModuleId = props.getProperty('RAIN_MODULE_ID');
+  const result       = {};
+  if (!rainModuleId || !deviceId) return result;
+
+  try {
+    const token   = getValidToken();
+    const cutoff  = new Date(now.getTime() - 32 * 24 * 3600 * 1000);
+    const params  =
+      'device_id='  + encodeURIComponent(deviceId) +
+      '&module_id=' + encodeURIComponent(rainModuleId) +
+      '&scale=1day' +
+      '&type=sum_rain' +
+      '&date_begin=' + Math.floor(cutoff.getTime() / 1000) +
+      '&date_end='   + Math.floor(now.getTime() / 1000) +
+      '&optimize=false&real_time=false';
+
+    const resp = UrlFetchApp.fetch(API.MEASURE + '?' + params, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+
+    if (resp.getResponseCode() === 200) {
+      const body = JSON.parse(resp.getContentText()).body || [];
+      (Array.isArray(body) ? body : []).forEach(chunk => {
+        const begTime  = chunk.beg_time;
+        const stepTime = chunk.step_time || 86400;
+        (chunk.value || []).forEach((val, i) => {
+          const mm  = (val && val[0] != null) ? val[0] : 0;
+          const d   = new Date((begTime + i * stepTime) * 1000);
+          const key = d.getFullYear() + '-' +
+                      String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                      String(d.getDate()).padStart(2, '0');
+          result[key] = Math.round(mm * 10) / 10;
+        });
+      });
+      try { cache.put(cacheKey, JSON.stringify(result), 3600); } catch(_) {}
+    } else {
+      Logger.log('getRainDailyMap HTTP ' + resp.getResponseCode() + ': ' + resp.getContentText());
+    }
+  } catch(e) {
+    Logger.log('getRainDailyMap error: ' + e);
+  }
+  return result;
+}
+
 function serveJsonData() {
   const ss        = SpreadsheetApp.getActiveSpreadsheet();
   const dataSheet = ss.getSheetByName(CFG.DATA_SHEET);
   const mensile   = leggiDatiStorici();   // da Foglio 1
   const now       = new Date();
+  const props     = PropertiesService.getScriptProperties();
+  const deviceId  = props.getProperty('DEVICE_ID');
 
   let attuale    = null;
   let giornaliero = [];
@@ -150,6 +208,9 @@ function serveJsonData() {
         byDay[key].push(r);
       });
 
+      // Totali giornalieri esatti da Netatmo getmeasure (con cache 1h)
+      const rainDailyMap = getRainDailyMap(deviceId, now);
+
       giornaliero = Object.keys(byDay).sort().map(data => {
         const recs  = byDay[data];
         const temps = recs.map(r => r.t);
@@ -159,15 +220,19 @@ function serveJsonData() {
           const alpha = (a * r.t / (b + r.t)) + Math.log(r.h / 100);
           return b * alpha / (a - alpha);
         });
-        // Pioggia: sum_rain_1 è una finestra scorrevole di 60 min → sommare i valori
-        // farebbe triple-counting. Usiamo le differenze positive consecutive:
-        // ogni incremento = nuova pioggia caduta nell'intervallo di 10 min.
-        let pioTot = 0;
-        for (let i = 1; i < recs.length; i++) {
-          const delta = (recs[i].p || 0) - (recs[i-1].p || 0);
-          if (delta > 0) pioTot += delta;
+        // Pioggia: usa il totale giornaliero esatto da getmeasure (scale=1day).
+        // Fallback ai delta di sum_rain_1 se getmeasure non è disponibile.
+        let pioTot;
+        if (rainDailyMap[data] != null) {
+          pioTot = rainDailyMap[data];
+        } else {
+          pioTot = 0;
+          for (let i = 1; i < recs.length; i++) {
+            const delta = (recs[i].p || 0) - (recs[i-1].p || 0);
+            if (delta > 0) pioTot += delta;
+          }
+          pioTot = Math.round(pioTot * 10) / 10;
         }
-        pioTot = Math.round(pioTot * 10) / 10;
         const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
         return { data, tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
                        hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
@@ -185,9 +250,18 @@ function serveJsonData() {
         const hums  = mr.map(r => r.h);
         if (temps.length) {
           const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
+          // Pioggia mensile live: somma dei totali giornalieri esatti da getmeasure
+          let pioggiaMese = null;
+          const giornalieroMese = giornaliero.filter(g => {
+            const d = new Date(g.data);
+            return d.getFullYear() === now.getFullYear() && d.getMonth() === m;
+          });
+          if (giornalieroMese.length) {
+            pioggiaMese = Math.round(giornalieroMese.reduce((s, g) => s + (g.pioggia || 0), 0) * 10) / 10;
+          }
           mensile[yr][m] = { tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
                              hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
-                             pioggia: null, fonte: 'live' };
+                             pioggia: pioggiaMese, fonte: 'live' };
         }
       }
     }
@@ -324,6 +398,12 @@ function detectStations(accessToken) {
     props.setProperty('MODULE_NAME', extMod.module_name || 'Esterno');
   }
 
+  const rainMod3 = device.modules.find(m => m.type === 'NAModule3');
+  if (rainMod3) {
+    props.setProperty('RAIN_MODULE_ID', rainMod3._id);
+    Logger.log('Pluviometro: ' + (rainMod3.module_name || rainMod3._id));
+  }
+
   Logger.log('Stazione: ' + device.station_name + ' | Modulo esterno: ' + (extMod ? extMod.module_name : 'non trovato'));
 }
 
@@ -367,6 +447,9 @@ function fetchAndSaveData() {
 
     // Pioggia da NAModule3 (rain gauge) — 0 se non presente o offline
     const rainMod = device.modules.find(m => m.type === 'NAModule3');
+    if (rainMod && !props.getProperty('RAIN_MODULE_ID')) {
+      props.setProperty('RAIN_MODULE_ID', rainMod._id);
+    }
     const rain    = (rainMod && rainMod.dashboard_data)
                     ? (rainMod.dashboard_data.sum_rain_1 != null ? rainMod.dashboard_data.sum_rain_1
                        : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
