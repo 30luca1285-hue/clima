@@ -37,6 +37,7 @@ function onOpen() {
     .addItem('Aggiorna dati ora', 'fetchAndSaveData')
     .addItem('Aggiorna solo dashboard', 'updateDashboard')
     .addItem('Importa dati storici (API)', 'importHistoricalData')
+    .addItem('Recupera pioggia mancante', 'recoverRainData')
     .addSeparator()
     .addItem('Stato sistema', 'showStatus')
     .addItem('Ferma aggiornamento automatico', 'removeTrigger')
@@ -530,6 +531,162 @@ function _doImport(startDate) {
 
   Logger.log('Import totale: ' + totalRows + ' righe.');
   updateDashboard();
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECUPERO PIOGGIA MANCANTE
+// ─────────────────────────────────────────────────────────────
+
+function recoverRainData() {
+  const ui    = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+  const deviceId = props.getProperty('DEVICE_ID');
+  if (!deviceId) { ui.alert('Setup non completato. Prima autorizza il sistema.'); return; }
+
+  const r = ui.prompt(
+    'Recupera pioggia mancante',
+    'Inserisci la data (o range) da recuperare.\n\nEsempi:\n  2026-03-17\n  2026-03-17/2026-03-18\n\nDefault: oggi',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+
+  const input = r.getResponseText().trim();
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const parts  = (input || today).split('/');
+  const startDate = new Date((parts[0] || today) + 'T00:00:00');
+  const endDate   = new Date((parts[1] || parts[0] || today) + 'T23:59:59');
+
+  if (isNaN(startDate) || isNaN(endDate)) { ui.alert('Data non valida.'); return; }
+
+  try {
+    const updated = _doRecoverRain(deviceId, startDate, endDate);
+    ui.alert('✅ Recupero completato!\n\n' + updated + ' righe aggiornate nel foglio Dati.');
+    updateDashboard();
+  } catch (err) {
+    ui.alert('❌ Errore:\n' + err.toString());
+    Logger.log('Errore recoverRainData: ' + err.toString());
+  }
+}
+
+function _doRecoverRain(deviceId, startDate, endDate) {
+  const token = getValidToken();
+
+  // 1. Trova il modulo pioggia (NAModule3)
+  const stResp = UrlFetchApp.fetch(API.STATIONS + '?device_id=' + encodeURIComponent(deviceId), {
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true,
+  });
+  if (stResp.getResponseCode() !== 200) throw new Error('getstationsdata: ' + stResp.getContentText());
+
+  const device  = (JSON.parse(stResp.getContentText()).body.devices || [])[0];
+  if (!device) throw new Error('Dispositivo non trovato.');
+  const rainMod = device.modules.find(m => m.type === 'NAModule3');
+  if (!rainMod) throw new Error('Pluviometro (NAModule3) non trovato nella stazione.');
+  const rainModuleId = rainMod._id;
+  Logger.log('Pluviometro: ' + (rainMod.module_name || rainModuleId));
+
+  // 2. Scarica pioggia via getmeasure (scale=30min → sum_rain per slot)
+  const params =
+    'device_id='  + encodeURIComponent(deviceId) +
+    '&module_id=' + encodeURIComponent(rainModuleId) +
+    '&scale=30min' +
+    '&type=sum_rain' +
+    '&date_begin=' + Math.floor(startDate.getTime() / 1000) +
+    '&date_end='   + Math.floor(endDate.getTime() / 1000) +
+    '&optimize=false' +
+    '&real_time=false';
+
+  const mResp = UrlFetchApp.fetch(API.MEASURE + '?' + params, {
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true,
+  });
+  if (mResp.getResponseCode() !== 200) throw new Error('getmeasure: ' + mResp.getContentText());
+
+  // Costruisce mappa  slotStart_ms → {slotStart, slotEnd, mm}  (per ogni slot da 30min)
+  const rainMap = {};
+  const rawBody = JSON.parse(mResp.getContentText()).body;
+  Logger.log('getmeasure body tipo: ' + (Array.isArray(rawBody) ? 'array' : typeof rawBody));
+
+  if (Array.isArray(rawBody)) {
+    // Formato optimize=false con beg_time/step_time/value
+    rawBody.forEach(chunk => {
+      const begTime  = chunk.beg_time;
+      const stepTime = chunk.step_time || 1800;
+      (chunk.value || []).forEach((val, i) => {
+        const mm = (val && val[0] != null) ? val[0] : 0;
+        if (mm > 0) {
+          const slotStart = (begTime + i * stepTime) * 1000;
+          const slotEnd   = slotStart + stepTime * 1000;
+          rainMap[slotStart] = { slotStart, slotEnd, mm };
+        }
+      });
+    });
+  } else if (rawBody && typeof rawBody === 'object') {
+    // Formato oggetto {timestamp_str: [val]}
+    Object.keys(rawBody).forEach(tsStr => {
+      const slotStart = parseInt(tsStr) * 1000;
+      const slotEnd   = slotStart + 1800 * 1000;
+      const val = rawBody[tsStr];
+      const mm  = Array.isArray(val) ? (val[0] != null ? val[0] : 0) : (typeof val === 'number' ? val : 0);
+      if (mm > 0) rainMap[slotStart] = { slotStart, slotEnd, mm };
+    });
+  }
+  Logger.log('Slot con pioggia trovati: ' + Object.keys(rainMap).length);
+
+  // 3. Leggi il foglio Dati e aggiorna colonna D (pioggia) per ogni riga nel range
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CFG.DATA_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) throw new Error('Foglio Dati vuoto o non trovato.');
+
+  const numRows  = sheet.getLastRow() - 1;
+  const tsValues = sheet.getRange(2, 1, numRows, 1).getValues();   // colonna A
+  const startMs  = startDate.getTime();
+  const endMs    = endDate.getTime();
+  let   updated  = 0;
+
+  // Per ogni riga nel range, assegna la pioggia dello slot 30min che la contiene
+  const rainUpdates = tsValues.map(([ts]) => {
+    if (!(ts instanceof Date)) return null;
+    const tsMs = ts.getTime();
+    if (tsMs < startMs || tsMs > endMs) return null;
+
+    let mm = 0;
+    for (const key of Object.keys(rainMap)) {
+      const { slotStart, slotEnd, mm: slotMm } = rainMap[key];
+      if (tsMs >= slotStart && tsMs < slotEnd) {
+        // Distribuisce equamente la pioggia del bucket sulle righe che cadono dentro
+        mm = slotMm;
+        break;
+      }
+    }
+    return mm;
+  });
+
+  // Per ogni slot piovoso, conta quante righe ci cadono dentro per distribuire correttamente
+  for (const key of Object.keys(rainMap)) {
+    const { slotStart, slotEnd, mm } = rainMap[key];
+    const rowsInSlot = [];
+    tsValues.forEach(([ts], i) => {
+      if (ts instanceof Date) {
+        const tsMs = ts.getTime();
+        if (tsMs >= slotStart && tsMs < slotEnd) rowsInSlot.push(i);
+      }
+    });
+    if (rowsInSlot.length === 0) continue;
+    // Prima riga dello slot prende tutta la pioggia, le altre 0
+    // (come fa il fetch live con sum_rain_1)
+    rowsInSlot.forEach((i, idx) => { rainUpdates[i] = idx === 0 ? mm : 0; });
+  }
+
+  // Scrivi le celle aggiornate
+  rainUpdates.forEach((mm, i) => {
+    if (mm === null) return;
+    sheet.getRange(i + 2, 4).setValue(mm);  // colonna D = pioggia
+    updated++;
+  });
+
+  Logger.log('Righe aggiornate: ' + updated);
+  return updated;
 }
 
 // ─────────────────────────────────────────────────────────────

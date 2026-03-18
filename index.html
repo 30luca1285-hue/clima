@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.3</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.4</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -881,8 +881,19 @@ function calcForecast(raw) {
 
   // Tendenza principale su 3h (soglia Zambretti: ±1.6 hPa)
   const delta = d3h !== null ? d3h : (d1h !== null ? d1h * 3 : 0);
-  const trend  = delta > 1.6 ? 'rising' : delta < -1.6 ? 'falling' : 'steady';
+  let trend    = delta > 1.6 ? 'rising' : delta < -1.6 ? 'falling' : 'steady';
   const rateH  = d3h !== null ? d3h / 3 : (d1h || 0);
+
+  // Override multi-finestra: calo sostenuto su 6h/12h anche se 3h è sotto soglia
+  if (trend !== 'falling') {
+    if ((d6h !== null && d6h < -3.0) || (d12h !== null && d12h < -5.0)) trend = 'falling';
+  }
+  if (trend !== 'rising') {
+    if ((d6h !== null && d6h > 3.0) || (d12h !== null && d12h > 5.0)) trend = 'rising';
+  }
+
+  // Pioggia attualmente rilevata dal sensore (sum_rain_1 nell'ultimo punto)
+  const isRaining = (last.p || 0) > 0.1;
 
   // Zambretti
   const month = new Date().getMonth() + 1;
@@ -903,6 +914,10 @@ function calcForecast(raw) {
   if (!alert && d3h !== null && d6h !== null && d3h > 1.5 && d6h < -1.5) {
     alert = { level:'info', msg:'ℹ️ Fronte probabilmente passato — miglioramento in atto' };
   }
+  // Calo sostenuto su finestre lunghe con pioggia in corso
+  if (!alert && isRaining && d6h !== null && d6h < -2.5) {
+    alert = { level:'warning', msg:'⚠️ Pioggia in corso — calo pressione sostenuto nelle ultime 6h' };
+  }
 
   // Punto di rugiada (Magnus) e spread T-Td
   const a = 17.625, b = 243.04;
@@ -911,13 +926,16 @@ function calcForecast(raw) {
   const spread = +(tempNow - td).toFixed(1);
   const cloudBaseM = Math.max(0, Math.round(spread * 125));
 
-  // Probabilità pioggia — 4 fattori ponderati (max 12 punti → 100%)
+  // Probabilità pioggia — 6 fattori ponderati (max 17 punti → 100%)
   let rs = 0;
   rs += slpNow < 995 ? 3 : slpNow < 1005 ? 2 : slpNow < 1013 ? 1 : 0;
   rs += (d3h||0) < -6 ? 3 : (d3h||0) < -3 ? 2 : (d3h||0) < -1.6 ? 1 : 0;
+  rs += (d6h||0) < -5 ? 2 : (d6h||0) < -2.5 ? 1 : 0;   // calo sostenuto 6h
+  rs += (d12h||0) < -6 ? 2 : (d12h||0) < -3 ? 1 : 0;   // tendenza 12h
   rs += humNow > 90 ? 3 : humNow > 80 ? 2 : humNow > 70 ? 1 : 0;
   rs += spread < 1 ? 3 : spread < 2 ? 2 : spread < 4 ? 1 : 0;
-  const rainProb = Math.min(Math.round((rs / 12) * 100), 100);
+  rs += isRaining ? 4 : 0;   // pioggia confermata dal sensore Netatmo
+  const rainProb = Math.min(Math.round((rs / 17) * 100), 100);
 
   // Label tendenza
   const sign = rateH >= 0 ? '+' : '';
@@ -928,7 +946,7 @@ function calcForecast(raw) {
 
   return { slpNow:+slpNow.toFixed(1), tempNow, humNow, trend, rateH,
            tendencyLabel, tendencyColor, d1h, d3h, d6h, d12h,
-           zCode, alert, td, spread, cloudBaseM, rainProb };
+           zCode, alert, td, spread, cloudBaseM, rainProb, isRaining };
 }
 
 function renderPrevisioni() {
@@ -981,6 +999,7 @@ function renderPrevisioni() {
 
   // Descrizione arricchita con indicatori aggiuntivi
   const descParts = [];
+  if (fc.isRaining)                              descParts.push('Pioggia rilevata dal sensore Netatmo.');
   if (fc.spread < 2)                             descParts.push(`Aria quasi satura (spread T–Td: ${fc.spread}°C) — nebbia o pioggia fine possibile.`);
   if (fc.humNow > 85 && fc.trend === 'falling')  descParts.push('Umidità elevata con pressione in calo: precipitazioni probabili nelle prossime ore.');
   if (fc.cloudBaseM > 0 && fc.cloudBaseM < 300)  descParts.push(`Base nubi molto bassa (${fc.cloudBaseM} m).`);
