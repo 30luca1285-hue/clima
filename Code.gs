@@ -120,85 +120,82 @@ function doGet(e) {
   );
 }
 
-// Restituisce mappa { 'YYYY-MM-DD': mm } con i totali giornalieri esatti
-// da Netatmo getmeasure scale=1day, con cache di 1 ora.
-function getRainDailyMap(deviceId, now) {
-  const cache    = CacheService.getScriptCache();
-  const cacheKey = 'rain_daily_map';
-  try {
-    const cached = cache.get(cacheKey);
-    if (cached) return JSON.parse(cached);
-  } catch(_) {}
-
-  const props      = PropertiesService.getScriptProperties();
-  let rainModuleId = props.getProperty('RAIN_MODULE_ID');
-  const result     = {};
-  if (!deviceId) return result;
-
-  // Auto-rileva il modulo pioggia se non ancora salvato
-  if (!rainModuleId) {
+// Aggiorna la cache pioggia giornaliera nelle ScriptProperties (max 1 volta ogni 30 min).
+// Chiamata da fetchAndSaveData dove auth e UrlFetch funzionano di sicuro.
+function updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token) {
+  const props    = PropertiesService.getScriptProperties();
+  const existing = props.getProperty('RAIN_DAILY_CACHE');
+  if (existing) {
     try {
-      const token  = getValidToken();
-      const stResp = UrlFetchApp.fetch(API.STATIONS + '?device_id=' + encodeURIComponent(deviceId), {
-        headers: { Authorization: 'Bearer ' + token },
-        muteHttpExceptions: true,
-      });
-      if (stResp.getResponseCode() === 200) {
-        const dev     = (JSON.parse(stResp.getContentText()).body.devices || [])[0];
-        const rainMod = dev && dev.modules.find(m => m.type === 'NAModule3');
-        if (rainMod) {
-          rainModuleId = rainMod._id;
-          props.setProperty('RAIN_MODULE_ID', rainModuleId);
-          Logger.log('RAIN_MODULE_ID auto-rilevato: ' + rainModuleId);
-        } else {
-          Logger.log('NAModule3 non trovato nella stazione.');
-        }
-      }
-    } catch(e) {
-      Logger.log('Auto-detect RAIN_MODULE_ID error: ' + e);
-    }
+      const parsed = JSON.parse(existing);
+      if (Date.now() - parsed.updated < 30 * 60 * 1000) return; // fresca di meno di 30 min
+    } catch(_) {}
   }
-  if (!rainModuleId) return result;
 
   try {
-    const token   = getValidToken();
-    const cutoff  = new Date(now.getTime() - 32 * 24 * 3600 * 1000);
-    const params  =
+    const now    = new Date();
+    const cutoff = new Date(now.getTime() - 32 * 24 * 3600 * 1000);
+    const params =
       'device_id='  + encodeURIComponent(deviceId) +
       '&module_id=' + encodeURIComponent(rainModuleId) +
       '&scale=1day' +
       '&type=sum_rain' +
       '&date_begin=' + Math.floor(cutoff.getTime() / 1000) +
       '&date_end='   + Math.floor(now.getTime() / 1000) +
-      '&optimize=false&real_time=false';
+      '&optimize=false&real_time=true';
 
     const resp = UrlFetchApp.fetch(API.MEASURE + '?' + params, {
-      headers: { Authorization: 'Bearer ' + token },
+      headers: { Authorization: 'Bearer ' + (token || getValidToken()) },
       muteHttpExceptions: true,
     });
 
-    if (resp.getResponseCode() === 200) {
-      const body = JSON.parse(resp.getContentText()).body || [];
-      (Array.isArray(body) ? body : []).forEach(chunk => {
+    if (resp.getResponseCode() !== 200) {
+      Logger.log('updateRainDailyCache HTTP ' + resp.getResponseCode() + ': ' + resp.getContentText());
+      return;
+    }
+
+    const rawBody = JSON.parse(resp.getContentText()).body;
+    const result  = {};
+
+    if (Array.isArray(rawBody)) {
+      rawBody.forEach(chunk => {
         const begTime  = chunk.beg_time;
         const stepTime = chunk.step_time || 86400;
         (chunk.value || []).forEach((val, i) => {
           const mm  = (val && val[0] != null) ? val[0] : 0;
           const d   = new Date((begTime + i * stepTime) * 1000);
-          const key = d.getFullYear() + '-' +
-                      String(d.getMonth() + 1).padStart(2, '0') + '-' +
-                      String(d.getDate()).padStart(2, '0');
+          const key = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
           result[key] = Math.round(mm * 10) / 10;
         });
       });
-      try { cache.put(cacheKey, JSON.stringify(result), 3600); } catch(_) {}
-    } else {
-      Logger.log('getRainDailyMap HTTP ' + resp.getResponseCode() + ': ' + resp.getContentText());
+    } else if (rawBody && typeof rawBody === 'object') {
+      Object.keys(rawBody).forEach(tsStr => {
+        const d   = new Date(parseInt(tsStr) * 1000);
+        const key = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        const val = rawBody[tsStr];
+        const mm  = Array.isArray(val) ? (val[0] != null ? val[0] : 0) : (typeof val === 'number' ? val : 0);
+        result[key] = Math.round(mm * 10) / 10;
+      });
     }
+
+    props.setProperty('RAIN_DAILY_CACHE', JSON.stringify({ updated: Date.now(), data: result }));
+    Logger.log('RAIN_DAILY_CACHE aggiornata: ' + JSON.stringify(result));
+
   } catch(e) {
-    Logger.log('getRainDailyMap error: ' + e);
+    Logger.log('updateRainDailyCacheIfNeeded error: ' + e);
   }
-  return result;
+}
+
+// Legge i totali giornalieri dalla cache ScriptProperties (precalcolata da fetchAndSaveData).
+function getRainDailyMap() {
+  const props    = PropertiesService.getScriptProperties();
+  const existing = props.getProperty('RAIN_DAILY_CACHE');
+  if (!existing) return {};
+  try {
+    return JSON.parse(existing).data || {};
+  } catch(_) {
+    return {};
+  }
 }
 
 function serveJsonData() {
@@ -233,8 +230,8 @@ function serveJsonData() {
         byDay[key].push(r);
       });
 
-      // Totali giornalieri esatti da Netatmo getmeasure (con cache 1h)
-      const rainDailyMap = getRainDailyMap(deviceId, now);
+      // Totali giornalieri esatti da cache ScriptProperties (aggiornata da fetchAndSaveData)
+      const rainDailyMap = getRainDailyMap();
 
       giornaliero = Object.keys(byDay).sort().map(data => {
         const recs  = byDay[data];
@@ -508,6 +505,10 @@ function fetchAndSaveData() {
 
     sheet.appendRow([timestamp, temp, hum, rain, press]);
     Logger.log('Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
+
+    // Aggiorna cache pioggia giornaliera (max 1 volta ogni 30 min)
+    const rainModuleId = props.getProperty('RAIN_MODULE_ID') || (rainMod ? rainMod._id : null);
+    if (rainModuleId) updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token);
 
     updateDashboard();
 
