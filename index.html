@@ -261,7 +261,7 @@
       <div class="chart-wrap h260"><canvas id="c-periodo-rd"></canvas></div>
     </div>
     <div id="card-periodo-rain" class="card" style="display:none">
-      <div class="card-title">Pioggia — mm per intervallo (10 min) &nbsp;<span id="periodo-rain-total" style="font-weight:400;color:var(--muted);font-size:.85em"></span></div>
+      <div class="card-title">Pioggia — mm ultima ora per campione &nbsp;<span id="periodo-rain-total" style="font-weight:400;color:var(--muted);font-size:.85em"></span></div>
       <div class="chart-wrap h260"><canvas id="c-periodo-rain"></canvas></div>
     </div>
     <div id="card-periodo-press" class="card" style="display:none">
@@ -766,25 +766,24 @@ function renderPeriodo() {
     scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
   });
 
-  // Pioggia — converte sum_rain_1 (finestra 60 min) in delta incrementali per intervallo
-  const rawRain  = data.map(r => r.p != null ? r.p : 0);
-  const rainData = rawRain.map((v, i) => {
-    if (i === 0) return 0;
-    const delta = v - rawRain[i - 1];
-    return delta > 0 ? Math.round(delta * 10) / 10 : 0;
-  });
+  // Pioggia — sum_rain_1 come area curve (intensità nel tempo, stile Netatmo/MyAtmo)
+  // Il totale è calcolato dai totali giornalieri accurati (getmeasure) in D.giornaliero
+  const rainData = data.map(r => r.p != null ? r.p : 0);
   const hasRainP = rainData.some(v => v > 0);
   document.getElementById('card-periodo-rain').style.display = hasRainP ? '' : 'none';
   if (hasRainP) {
-    const totalMm = rainData.reduce((s, v) => s + v, 0);
-    document.getElementById('periodo-rain-total').textContent = '— Totale: ' + totalMm.toFixed(1) + ' mm';
-    mkChart('c-periodo-rain', 'bar', { labels, datasets: [
-      { label: 'Pioggia mm', data: rainData,
-        backgroundColor: '#60a5fa88', borderColor: '#60a5fa', borderWidth: 1, borderRadius: 2 },
+    const totalMm = (D.giornaliero || [])
+      .filter(g => g.data >= fromVal && g.data <= toVal)
+      .reduce((s, g) => s + (g.pioggia || 0), 0);
+    document.getElementById('periodo-rain-total').textContent = totalMm > 0 ? '— Totale: ' + totalMm.toFixed(1) + ' mm' : '';
+    mkChart('c-periodo-rain', 'line', { labels, datasets: [
+      { label: 'Pioggia (mm ultima ora)', data: rainData,
+        borderColor: '#60a5fa', backgroundColor: '#60a5fa22',
+        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
     ]}, {
       ...CHART_DEFAULTS,
       plugins: { legend: { labels: { color: '#94a3b8' } },
-        tooltip: { callbacks: { label: ctx => 'Pioggia: ' + ctx.parsed.y.toFixed(1) + ' mm' } } },
+        tooltip: { callbacks: { label: ctx => 'mm/ora: ' + ctx.parsed.y.toFixed(1) } } },
       scales: { x: AXIS.x({ xticks: { maxTicksLimit: 14 } }), y: AXIS.y(' mm', { y: { min: 0 } }) },
     });
   }

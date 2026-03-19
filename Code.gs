@@ -130,10 +130,35 @@ function getRainDailyMap(deviceId, now) {
     if (cached) return JSON.parse(cached);
   } catch(_) {}
 
-  const props        = PropertiesService.getScriptProperties();
-  const rainModuleId = props.getProperty('RAIN_MODULE_ID');
-  const result       = {};
-  if (!rainModuleId || !deviceId) return result;
+  const props      = PropertiesService.getScriptProperties();
+  let rainModuleId = props.getProperty('RAIN_MODULE_ID');
+  const result     = {};
+  if (!deviceId) return result;
+
+  // Auto-rileva il modulo pioggia se non ancora salvato
+  if (!rainModuleId) {
+    try {
+      const token  = getValidToken();
+      const stResp = UrlFetchApp.fetch(API.STATIONS + '?device_id=' + encodeURIComponent(deviceId), {
+        headers: { Authorization: 'Bearer ' + token },
+        muteHttpExceptions: true,
+      });
+      if (stResp.getResponseCode() === 200) {
+        const dev     = (JSON.parse(stResp.getContentText()).body.devices || [])[0];
+        const rainMod = dev && dev.modules.find(m => m.type === 'NAModule3');
+        if (rainMod) {
+          rainModuleId = rainMod._id;
+          props.setProperty('RAIN_MODULE_ID', rainModuleId);
+          Logger.log('RAIN_MODULE_ID auto-rilevato: ' + rainModuleId);
+        } else {
+          Logger.log('NAModule3 non trovato nella stazione.');
+        }
+      }
+    } catch(e) {
+      Logger.log('Auto-detect RAIN_MODULE_ID error: ' + e);
+    }
+  }
+  if (!rainModuleId) return result;
 
   try {
     const token   = getValidToken();
