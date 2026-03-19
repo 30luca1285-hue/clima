@@ -350,14 +350,14 @@
     <div class="card">
       <div class="card-title">Come funziona la previsione</div>
       <div style="color:var(--muted);font-size:0.82rem;line-height:1.9">
-        <b style="color:var(--text)">Algoritmo Zambretti (1920):</b> 26 categorie calibrate su pressione SLP e tendenza 3h — accuratezza ~90% per climi europei.<br>
+        <b style="color:var(--text)">Nowcast locale:</b> previsione a breve termine basata su pressione SLP, tendenza barometrica, umidità e sensore pioggia Netatmo.<br>
         <b style="color:var(--text)">Pressione SLP:</b> convertita a livello del mare dalla quota stazione (112 m s.l.m.). &gt;1020 hPa = alta · 1009–1020 = variabile · &lt;1009 = perturbato.<br>
         <b style="color:var(--text)">Tendenza 3h:</b> &gt;+1.6 hPa = in aumento · &lt;−1.6 hPa = in calo · altrimenti stabile.<br>
         <b style="color:var(--text)">Alert automatici:</b> calo &gt;3 hPa/3h = peggioramento rapido · &gt;6 hPa/3h = venti forti · &gt;10 hPa/3h = tempesta.<br>
         <b style="color:var(--text)">Probabilità pioggia:</b> calcolata su 4 fattori — pressione assoluta, tendenza, umidità relativa, spread T–Td (punto di rugiada).<br>
         <b style="color:var(--text)">Base nubi stimata:</b> ogni 1°C di spread T–Td corrisponde a ~125 m di base delle nubi.<br>
         <b style="color:var(--text)">Temporali convettivi (Open-Meteo):</b> CAPE = energia convettiva disponibile (>300 J/kg = instabile, >1000 = forte, >2500 = estremo) · LI = indice di sollevamento (negativo = instabile) · CIN = inibizione convettiva (frena i temporali anche con CAPE alto).<br>
-        <span style="color:var(--accent)">Zambretti usa solo dati Netatmo locali. Gli indici convettivi vengono dal modello ECMWF via Open-Meteo (gratuito, aggiornato ogni 15 min).</span>
+        <span style="color:var(--accent)">Il nowcast usa solo dati Netatmo locali. Gli indici convettivi vengono dal modello ECMWF via Open-Meteo (gratuito, aggiornato ogni 15 min).</span>
       </div>
     </div>
   </div>
@@ -808,7 +808,7 @@ function renderPeriodo() {
 
 
 // ══════════════════════════════════════════════════════════════
-// PREVISIONI — Zambretti + regole barometriche + umidità/Td
+// PREVISIONI — nowcast barometrico + umidità/Td
 // ══════════════════════════════════════════════════════════════
 const ELEVATION_M = 112; // quota stazione (m s.l.m.)
 
@@ -888,7 +888,7 @@ function calcForecast(raw) {
   const d6h  = slp6h  !== null ? +(slpNow - slp6h ).toFixed(1) : null;
   const d12h = slp12h !== null ? +(slpNow - slp12h).toFixed(1) : null;
 
-  // Tendenza principale su 3h (soglia Zambretti: ±1.6 hPa)
+  // Tendenza principale su 3h (soglia barometrica: ±1.6 hPa)
   const delta = d3h !== null ? d3h : (d1h !== null ? d1h * 3 : 0);
   let trend    = delta > 1.6 ? 'rising' : delta < -1.6 ? 'falling' : 'steady';
   const rateH  = d3h !== null ? d3h / 3 : (d1h || 0);
