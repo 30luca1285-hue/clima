@@ -29,7 +29,7 @@ const API = {
 //   STUDIO            = NAMain    (base interna stessa stazione, T/H interni stanza + Pressione + CO2) — nuovo tab.
 // Entrambi condividono device_id, refresh token, credenziali.
 function _stationCfg(stationKey) {
-  const sk = (stationKey || 'ESTERNO').toUpperCase();
+  const sk = (typeof stationKey === 'string' ? stationKey : 'ESTERNO').toUpperCase();
   const props = PropertiesService.getScriptProperties();
   const deviceId = props.getProperty('DEVICE_ID');
 
