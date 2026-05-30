@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v15.6.1</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.2</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -161,11 +161,20 @@
       <div class="live-hum" id="hdr-h">— %</div>
       <div class="live-meta" id="hdr-press" style="color:var(--purple)"></div>
       <div class="live-meta" id="hdr-rain" style="color:var(--cold);display:none"></div>
+      <div class="live-meta" id="hdr-co2" style="display:none"></div>
       <div class="live-meta" id="hdr-ts"></div>
     </div>
   </div>
   <div class="header-spacer"></div>
   <div class="update-badge" id="hdr-update"></div>
+</div>
+
+<!-- ══ SENSORE PICKER ════════════════════════════════════════ -->
+<div id="station-picker" class="nav" style="background:#1e293b;padding:8px 12px;border-radius:8px;margin-bottom:10px;display:flex;gap:6px;align-items:center">
+  <span style="color:#94a3b8;font-size:0.85rem;margin-right:4px">📍 Sensore:</span>
+  <button class="station-btn active" data-station="esterno" onclick="setStation('esterno',this)">Esterno</button>
+  <button class="station-btn" data-station="studio" onclick="setStation('studio',this)">Studio</button>
+  <span id="station-name" style="color:#64748b;font-size:0.78rem;margin-left:auto"></span>
 </div>
 
 <!-- ══ NAV ════════════════════════════════════════════════════ -->
@@ -389,11 +398,32 @@ let D = null;        // dati globali
 let CY = null;       // anno selezionato
 let charts = {};
 let rendered = {};   // sezioni già renderizzate
+let currentStation = 'esterno'; // default: NAModule1 (storici Foglio1). 'studio' = NAMain interno
+
+// ── SWITCH STAZIONE ────────────────────────────────────────
+function setStation(key, btn) {
+  if (key === currentStation) return;
+  currentStation = key;
+  // UI: attiva bottone selezionato
+  document.querySelectorAll('.station-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  // Reset stato e ri-carica
+  Object.values(charts).forEach(c => { try { c.destroy(); } catch(_) {} });
+  charts = {};
+  rendered = {};
+  D = null;
+  CY = null;
+  document.getElementById('loading').style.display = '';
+  document.getElementById('loading').innerHTML = '<div class="loading-spinner"></div>Caricamento ' + key + '…';
+  // Nasconde tutte le sezioni renderizzate (verranno re-init dopo load)
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  load();
+}
 
 // ── FETCH ────────────────────────────────────────────────────
 async function load() {
   try {
-    const res = await fetch(API + '?action=getData');
+    const res = await fetch(API + '?action=getData&station=' + encodeURIComponent(currentStation));
     D = await res.json();
     init();
   } catch(e) {
@@ -404,6 +434,41 @@ async function load() {
 
 function init() {
   document.getElementById('loading').style.display = 'none';
+
+  // Mostra nome stazione (da JSON backend)
+  if (D && D.nomeStazione) {
+    document.getElementById('station-name').textContent = D.nomeStazione;
+  }
+
+  // Stazione senza dati → mostra messaggio e fermati
+  const isEmpty = !D.attuale && (!D.raw || !D.raw.length) && (!D.mensile || !Object.keys(D.mensile).length);
+  if (isEmpty) {
+    // Reset header
+    ['hdr-t','hdr-h','hdr-press','hdr-rain','hdr-ts','hdr-update'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    });
+    // Nascondi tutte le sezioni
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    // Mostra placeholder
+    let ph = document.getElementById('empty-station');
+    if (!ph) {
+      ph = document.createElement('div');
+      ph.id = 'empty-station';
+      ph.style.cssText = 'max-width:600px;margin:60px auto;padding:32px;background:#1e293b;border-radius:12px;text-align:center;color:#94a3b8';
+      ph.innerHTML = '<div style="font-size:3rem;margin-bottom:12px">📡</div>' +
+        '<h2 style="color:#e2e8f0;margin:0 0 12px;font-size:1.3rem">Sensore senza dati</h2>' +
+        '<p style="margin:0 0 8px">Il sensore <b>' + (D.nomeStazione || currentStation) + '</b> non ha ancora dati registrati.</p>' +
+        '<p style="margin:0;font-size:0.88rem;color:#64748b">Nel foglio Google esegui<br>menu <b>🌡️ Clima → Studio (interno NAMain) → Import 30gg storici Studio</b>.</p>';
+      document.body.appendChild(ph);
+    }
+    ph.style.display = '';
+    return;
+  } else {
+    const ph = document.getElementById('empty-station');
+    if (ph) ph.style.display = 'none';
+  }
+
   document.getElementById('s-periodo').classList.add('active');
 
   // Header
@@ -416,6 +481,20 @@ function init() {
       t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
     if (D.attuale.press != null) {
       document.getElementById('hdr-press').textContent = D.attuale.press.toFixed(1) + ' hPa';
+    }
+    // CO2 solo se presente (tab Studio)
+    const elCo2 = document.getElementById('hdr-co2');
+    if (D.attuale.co2 != null) {
+      const c = D.attuale.co2;
+      elCo2.textContent = '💨 CO2 ' + c.toFixed(0) + ' ppm';
+      // colore qualità: <800 buona, 800-1200 media, >1200 alta
+      elCo2.style.color = c < 800 ? '#22c55e' : c < 1200 ? '#eab308' : '#ef4444';
+      elCo2.style.display = '';
+      document.getElementById('hdr-press').style.display = 'none'; // press solo per Esterno
+      document.getElementById('hdr-rain').style.display = 'none';  // niente pioggia per Studio
+    } else {
+      elCo2.style.display = 'none';
+      document.getElementById('hdr-press').style.display = '';
     }
     // Pioggia di oggi da giornaliero
     const oggi = new Date().toISOString().slice(0, 10);

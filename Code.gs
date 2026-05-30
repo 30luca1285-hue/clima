@@ -10,9 +10,11 @@
 // ============================================================
 
 const CFG = {
-  DATA_SHEET:      'Dati',
-  DASHBOARD_SHEET: 'Dashboard',
-  INTERVAL_MIN:    10,           // minuti tra un fetch e l'altro
+  DATA_SHEET:              'Dati',
+  DASHBOARD_SHEET:         'Dashboard',
+  DATA_SHEET_STUDIO:       'Dati_Studio',
+  DASHBOARD_SHEET_STUDIO:  'Dashboard_Studio',
+  INTERVAL_MIN:            10,           // minuti tra un fetch e l'altro
 };
 
 const API = {
@@ -22,26 +24,80 @@ const API = {
   MEASURE:  'https://api.netatmo.com/api/getmeasure',
 };
 
+// Restituisce config di una "stazione" — in realtà 2 sensori sullo stesso device Netatmo:
+//   ESTERNO (default) = NAModule1 (modulo esterno T/H/Pioggia/Pressione) — quello legacy, sheet "Dati"/Foglio1.
+//   STUDIO            = NAMain    (base interna stessa stazione, T/H interni stanza + Pressione + CO2) — nuovo tab.
+// Entrambi condividono device_id, refresh token, credenziali.
+function _stationCfg(stationKey) {
+  const sk = (stationKey || 'ESTERNO').toUpperCase();
+  const props = PropertiesService.getScriptProperties();
+  const deviceId = props.getProperty('DEVICE_ID');
+
+  if (sk === 'STUDIO') {
+    return {
+      key:           'STUDIO',
+      isMain:        true,                    // legge device.dashboard_data (NAMain)
+      deviceId:      deviceId,
+      moduleId:      deviceId,                // per getmeasure su NAMain: module_id = device_id
+      rainModuleId:  null,                    // NAMain non ha pluviometro
+      deviceName:    props.getProperty('DEVICE_NAME') || 'Studio (interno)',
+      dataSheetName: 'Dati_Studio',
+      dashSheetName: 'Dashboard_Studio',
+      rainCacheKey:  null,
+      jsonCacheKey:  '_DATA_CACHE_STUDIO',
+      hasFoglio1:    false,
+    };
+  }
+  // ESTERNO (default, legacy) = NAModule1, sheet "Dati"/"Dashboard"/"Foglio1"
+  return {
+    key:           'ESTERNO',
+    isMain:        false,
+    deviceId:      deviceId,
+    moduleId:      props.getProperty('MODULE_ID'),
+    rainModuleId:  props.getProperty('RAIN_MODULE_ID'),
+    deviceName:    props.getProperty('MODULE_NAME') || 'Esterno',
+    dataSheetName: CFG.DATA_SHEET,
+    dashSheetName: CFG.DASHBOARD_SHEET,
+    rainCacheKey:  'RAIN_DAILY_CACHE',
+    jsonCacheKey:  '_DATA_CACHE',
+    hasFoglio1:    true,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // MENU
 // ─────────────────────────────────────────────────────────────
 
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('🌡️ Clima')
+  const ui = SpreadsheetApp.getUi();
+  const studio = ui.createMenu('Studio (interno NAMain)')
+    .addItem('Aggiorna ora (Studio)', 'fetchAndSaveDataStudio')
+    .addItem('Aggiorna dashboard Studio', 'updateDashboardStudio')
+    .addItem('Import 30gg storici Studio', 'importHistoricalDataStudio');
+
+  ui.createMenu('🌡️ Clima')
     .addItem('0. Autorizza script (prima volta)', 'autorizzaScript')
     .addItem('1. Configura credenziali Netatmo', 'setupCredentials')
     .addItem('2. Autorizza con Netatmo', 'startAuth')
     .addItem('3. Avvia aggiornamento automatico', 'setupTrigger')
     .addSeparator()
-    .addItem('Aggiorna dati ora', 'fetchAndSaveData')
-    .addItem('Aggiorna solo dashboard', 'updateDashboard')
+    .addItem('Rileva stazioni Netatmo', 'rilevaStazioni')
+    .addItem('Aggiorna dati ora (Esterno)', 'fetchAndSaveData')
+    .addItem('Aggiorna solo dashboard (Esterno)', 'updateDashboard')
+    .addItem('Archivia mese precedente in Foglio1', 'archiviaMesePrecedente')
     .addItem('Importa dati storici (API)', 'importHistoricalData')
     .addItem('Recupera pioggia mancante', 'recoverRainData')
+    .addSeparator()
+    .addSubMenu(studio)
     .addSeparator()
     .addItem('Stato sistema', 'showStatus')
     .addItem('Ferma aggiornamento automatico', 'removeTrigger')
     .addToUi();
+}
+
+// Wrapper menu Studio (interno NAMain)
+function updateDashboardStudio() {
+  updateDashboard('STUDIO');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -104,27 +160,45 @@ function startAuth() {
   );
 }
 
-// doGet viene chiamato da Netatmo dopo l'autorizzazione
+// doGet viene chiamato da Netatmo dopo l'autorizzazione e dal frontend per i dati
 function doGet(e) {
   const params = e && e.parameter ? e.parameter : {};
 
-  if (params.code)            return handleOAuthCallback(params.code);
-  if (params.action === 'getData') return serveJsonData();
+  if (params.code)                   return handleOAuthCallback(params.code);
+  if (params.action === 'getData')   return serveJsonData(params.station);
+  if (params.action === 'listStations') return listStationsJson();
+  if (params.action === 'clearCache') {
+    _cacheInvalidate('STUDIO');
+    _cacheInvalidate('AZIENDA');
+    return ContentService.createTextOutput('cache cleared').setMimeType(ContentService.MimeType.TEXT);
+  }
 
-  const props = PropertiesService.getScriptProperties();
-  const ready = !!props.getProperty('REFRESH_TOKEN');
-  return HtmlService.createHtmlOutput(
-    '<h2>🌡️ Clima — Netatmo Monitor</h2>' +
-    '<p>Stato: ' + (ready ? '✅ Autorizzato' : '⏳ In attesa di autorizzazione') + '</p>' +
-    '<p><b>API dati:</b> <code>' + getWebAppUrl() + '?action=getData</code></p>'
-  );
+  // Frontend: index.html con tab Azienda/Studio
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('Clima Olio Galluzzi')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+}
+
+// Espone le "stazioni" (sensori) configurate per il frontend.
+// Stesso device Netatmo, due tab: Esterno (NAModule1) + Studio (NAMain).
+function listStationsJson() {
+  const out = [];
+  ['ESTERNO', 'STUDIO'].forEach(sk => {
+    const cfg = _stationCfg(sk);
+    if (cfg.deviceId) out.push({ key: cfg.key, nome: cfg.deviceName });
+  });
+  return ContentService
+    .createTextOutput(JSON.stringify({ stazioni: out }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Aggiorna la cache pioggia giornaliera nelle ScriptProperties (max 1 volta ogni 30 min).
 // Chiamata da fetchAndSaveData dove auth e UrlFetch funzionano di sicuro.
-function updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token) {
+// cacheKey opzionale: 'RAIN_DAILY_CACHE' (azienda, default) o 'RAIN_DAILY_CACHE_STUDIO'.
+function updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token, cacheKey) {
+  const PROP_KEY = cacheKey || 'RAIN_DAILY_CACHE';
   const props    = PropertiesService.getScriptProperties();
-  const existing = props.getProperty('RAIN_DAILY_CACHE');
+  const existing = props.getProperty(PROP_KEY);
   if (existing) {
     try {
       const parsed = JSON.parse(existing);
@@ -178,8 +252,8 @@ function updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token) {
       });
     }
 
-    props.setProperty('RAIN_DAILY_CACHE', JSON.stringify({ updated: Date.now(), data: result }));
-    Logger.log('RAIN_DAILY_CACHE aggiornata: ' + JSON.stringify(result));
+    props.setProperty(PROP_KEY, JSON.stringify({ updated: Date.now(), data: result }));
+    Logger.log(PROP_KEY + ' aggiornata: ' + Object.keys(result).length + ' giorni');
 
   } catch(e) {
     Logger.log('updateRainDailyCacheIfNeeded error: ' + e);
@@ -187,9 +261,12 @@ function updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token) {
 }
 
 // Legge i totali giornalieri dalla cache ScriptProperties (precalcolata da fetchAndSaveData).
-function getRainDailyMap() {
+// stationKey: 'AZIENDA' (default) o 'STUDIO'.
+function getRainDailyMap(stationKey) {
+  const sk    = (stationKey || 'AZIENDA').toUpperCase();
+  const propKey = sk === 'STUDIO' ? 'RAIN_DAILY_CACHE_STUDIO' : 'RAIN_DAILY_CACHE';
   const props    = PropertiesService.getScriptProperties();
-  const existing = props.getProperty('RAIN_DAILY_CACHE');
+  const existing = props.getProperty(propKey);
   if (!existing) return {};
   try {
     return JSON.parse(existing).data || {};
@@ -198,23 +275,98 @@ function getRainDailyMap() {
   }
 }
 
-function serveJsonData() {
+// ─────────────────────────────────────────────────────────────
+// CACHE JSON (CacheService, TTL 9 min, chunking per > 100 KB)
+// ─────────────────────────────────────────────────────────────
+
+const CACHE_KEY   = 'CLIMA_JSON';
+const CACHE_CHUNK = 90000; // byte per chunk (limite CacheService: 100 KB)
+const CACHE_TTL   = 540;   // secondi (9 minuti)
+
+function _cacheKeyFor(stationKey) {
+  const sk = (stationKey || 'AZIENDA').toUpperCase();
+  return sk === 'STUDIO' ? CACHE_KEY + '_STUDIO' : CACHE_KEY;
+}
+
+function _cacheWrite(json, stationKey) {
+  try {
+    const base   = _cacheKeyFor(stationKey);
+    const cache  = CacheService.getScriptCache();
+    const n      = Math.ceil(json.length / CACHE_CHUNK);
+    const obj    = {};
+    obj[base + '_N'] = String(n);
+    for (let i = 0; i < n; i++) {
+      obj[base + '_' + i] = json.slice(i * CACHE_CHUNK, (i + 1) * CACHE_CHUNK);
+    }
+    cache.putAll(obj, CACHE_TTL);
+  } catch(e) {
+    Logger.log('_cacheWrite error: ' + e);
+  }
+}
+
+function _cacheRead(stationKey) {
+  try {
+    const base  = _cacheKeyFor(stationKey);
+    const cache = CacheService.getScriptCache();
+    const nStr  = cache.get(base + '_N');
+    if (!nStr) return null;
+    const n     = parseInt(nStr);
+    const parts = [];
+    for (let i = 0; i < n; i++) {
+      const part = cache.get(base + '_' + i);
+      if (part === null) return null;
+      parts.push(part);
+    }
+    return parts.join('');
+  } catch(e) {
+    Logger.log('_cacheRead error: ' + e);
+    return null;
+  }
+}
+
+function _cacheInvalidate(stationKey) {
+  try {
+    const cache = CacheService.getScriptCache();
+    cache.remove(_cacheKeyFor(stationKey) + '_N');
+  } catch(e) {}
+}
+
+// ─────────────────────────────────────────────────────────────
+
+function serveJsonData(stationKey) {
+  const cfg = _stationCfg(stationKey);
+
+  // Prova a servire dalla cache specifica della stazione
+  const cached = _cacheRead(cfg.key);
+  if (cached) {
+    return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+  }
+
   const ss        = SpreadsheetApp.getActiveSpreadsheet();
-  const dataSheet = ss.getSheetByName(CFG.DATA_SHEET);
-  const mensile   = leggiDatiStorici();   // da Foglio 1
+  const dataSheet = ss.getSheetByName(cfg.dataSheetName);
+  // Foglio1 storico mensile è SOLO per stazione STUDIO (i suoi storici sono lì da 2020)
+  const mensile   = cfg.hasFoglio1 ? leggiDatiStorici() : {};
   const now       = new Date();
-  const props     = PropertiesService.getScriptProperties();
-  const deviceId  = props.getProperty('DEVICE_ID');
 
   let attuale    = null;
   let giornaliero = [];
   let raw         = [];
 
   if (dataSheet && dataSheet.getLastRow() > 1) {
-    const cutoff30d = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-    raw = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 5).getValues()
+    const cutoff30d  = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+    const lastRow    = dataSheet.getLastRow();
+    const LOOK_BACK  = 5000;
+    const startRow   = Math.max(2, lastRow - LOOK_BACK + 1);
+    const numRows    = lastRow - startRow + 1;
+    const nCols      = cfg.isMain ? 4 : 5;
+    raw = dataSheet.getRange(startRow, 1, numRows, nCols).getValues()
       .filter(r => r[0] instanceof Date && r[0] >= cutoff30d && r[1] !== '' && !isNaN(parseFloat(r[1])))
-      .map(r => ({ ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: parseFloat(r[3]) || 0, press: r[4] !== '' && r[4] !== null ? parseFloat(r[4]) : null }));
+      .map(r => cfg.isMain
+        ? { ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: 0,
+            co2: r[3] !== '' && r[3] !== null ? parseFloat(r[3]) : null }
+        : { ts: r[0].getTime(), t: parseFloat(r[1]), h: parseFloat(r[2]), p: parseFloat(r[3]) || 0,
+            press: r[4] !== '' && r[4] !== null ? parseFloat(r[4]) : null }
+      );
 
     if (raw.length) {
       attuale = raw[raw.length - 1];
@@ -231,7 +383,7 @@ function serveJsonData() {
       });
 
       // Totali giornalieri esatti da cache ScriptProperties (aggiornata da fetchAndSaveData)
-      const rainDailyMap = getRainDailyMap();
+      const rainDailyMap = getRainDailyMap(cfg.key);
 
       giornaliero = Object.keys(byDay).sort().map(data => {
         const recs  = byDay[data];
@@ -262,36 +414,44 @@ function serveJsonData() {
                        pioggia: pioTot };
       });
 
-      // Integra mese corrente in mensile se non già presente in Foglio 1
-      const yr = String(now.getFullYear());
-      const m  = now.getMonth();
-      if (!mensile[yr]) mensile[yr] = {};
-      if (!mensile[yr][m]) {
-        const mr    = raw.filter(r => { const d = new Date(r.ts); return d.getFullYear() === now.getFullYear() && d.getMonth() === m; });
-        const temps = mr.map(r => r.t);
-        const hums  = mr.map(r => r.h);
-        if (temps.length) {
-          const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
-          // Pioggia mensile live: somma dei totali giornalieri esatti da getmeasure
-          let pioggiaMese = null;
-          const giornalieroMese = giornaliero.filter(g => {
-            const d = new Date(g.data);
-            return d.getFullYear() === now.getFullYear() && d.getMonth() === m;
-          });
-          if (giornalieroMese.length) {
-            pioggiaMese = Math.round(giornalieroMese.reduce((s, g) => s + (g.pioggia || 0), 0) * 10) / 10;
+      // Integra tutti i mesi presenti in raw non già presenti in Foglio 1
+      const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
+      const mesiInRaw = new Set(raw.map(r => { const d = new Date(r.ts); return d.getFullYear() + '-' + d.getMonth(); }));
+      mesiInRaw.forEach(key => {
+        const [yrN, mN] = key.split('-').map(Number);
+        const yr = String(yrN);
+        if (!mensile[yr]) mensile[yr] = {};
+        if (!mensile[yr][mN]) {
+          const mr    = raw.filter(r => { const d = new Date(r.ts); return d.getFullYear() === yrN && d.getMonth() === mN; });
+          const temps = mr.map(r => r.t);
+          const hums  = mr.map(r => r.h);
+          if (temps.length) {
+            let pioggiaMese = null;
+            const giornalieroMese = giornaliero.filter(g => {
+              const d = new Date(g.data);
+              return d.getFullYear() === yrN && d.getMonth() === mN;
+            });
+            if (giornalieroMese.length) {
+              pioggiaMese = Math.round(giornalieroMese.reduce((s, g) => s + (g.pioggia || 0), 0) * 10) / 10;
+            }
+            const isCurrent = yrN === now.getFullYear() && mN === now.getMonth();
+            mensile[yr][mN] = { tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
+                                hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
+                                pioggia: pioggiaMese, fonte: isCurrent ? 'live' : 'calcolato' };
           }
-          mensile[yr][m] = { tMin: Math.min(...temps), tMedia: avg(temps), tMax: Math.max(...temps),
-                             hMin: Math.min(...hums),  hMedia: avg(hums),  hMax: Math.max(...hums),
-                             pioggia: pioggiaMese, fonte: 'live' };
         }
-      }
+      });
     }
   }
 
-  return ContentService
-    .createTextOutput(JSON.stringify({ aggiornato: now.getTime(), attuale, mensile, giornaliero, raw }))
-    .setMimeType(ContentService.MimeType.JSON);
+  const json = JSON.stringify({
+    aggiornato: now.getTime(),
+    stazione:   cfg.key,
+    nomeStazione: cfg.deviceName,
+    attuale, mensile, giornaliero, raw
+  });
+  _cacheWrite(json, cfg.key);
+  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
 }
 
 function handleOAuthCallback(code) {
@@ -407,114 +567,145 @@ function detectStations(accessToken) {
   const devices = body.devices || [];
   if (!devices.length) throw new Error('Nessuna stazione trovata.');
 
-  // Se c'è più di una stazione, usa la prima
+  // Una sola stazione: il NAMain è il device stesso (Studio interno), NAModule1 = esterno, NAModule3 = pluviometro.
   const device = devices[0];
-  const extMod = device.modules.find(m => m.type === 'NAModule1'); // NAModule1 = outdoor
+  const extMod = device.modules.find(m => m.type === 'NAModule1');
+  const rain3  = device.modules.find(m => m.type === 'NAModule3');
 
   const props = PropertiesService.getScriptProperties();
   props.setProperty('DEVICE_ID',   device._id);
-  props.setProperty('DEVICE_NAME', device.station_name || 'Stazione');
-
+  props.setProperty('DEVICE_NAME', device.station_name || 'Stazione Studio');
   if (extMod) {
     props.setProperty('MODULE_ID',   extMod._id);
     props.setProperty('MODULE_NAME', extMod.module_name || 'Esterno');
   }
-
-  const rainMod3 = device.modules.find(m => m.type === 'NAModule3');
-  if (rainMod3) {
-    props.setProperty('RAIN_MODULE_ID', rainMod3._id);
-    Logger.log('Pluviometro: ' + (rainMod3.module_name || rainMod3._id));
+  if (rain3) {
+    props.setProperty('RAIN_MODULE_ID', rain3._id);
   }
-
-  Logger.log('Stazione: ' + device.station_name + ' | Modulo esterno: ' + (extMod ? extMod.module_name : 'non trovato'));
+  Logger.log('Stazione: ' + device.station_name + ' (' + device._id + ')' +
+             ' | NAMain → tab Studio' +
+             ' | NAModule1 esterno: ' + (extMod ? extMod.module_name : 'no') +
+             ' | NAModule3 pluviometro: ' + (rain3 ? (rain3.module_name || rain3._id) : 'no'));
 }
 
 // ─────────────────────────────────────────────────────────────
 // FETCH DATI
 // ─────────────────────────────────────────────────────────────
 
-function fetchAndSaveData() {
+function fetchAndSaveData(stationKey) {
   try {
-    const props    = PropertiesService.getScriptProperties();
-    const deviceId = props.getProperty('DEVICE_ID');
-    const moduleId = props.getProperty('MODULE_ID');
+    const cfg = _stationCfg(stationKey);
+    const props = PropertiesService.getScriptProperties();
 
-    if (!deviceId || !moduleId) {
-      Logger.log('Setup non completato: mancano DEVICE_ID o MODULE_ID.');
+    if (!cfg.deviceId || !cfg.moduleId) {
+      Logger.log('[' + cfg.key + '] Setup non completato: mancano DEVICE_ID o MODULE_ID.');
       return;
     }
 
     const token = getValidToken();
-    const resp  = UrlFetchApp.fetch(API.STATIONS + '?device_id=' + encodeURIComponent(deviceId), {
+    const resp  = UrlFetchApp.fetch(API.STATIONS + '?device_id=' + encodeURIComponent(cfg.deviceId), {
       headers: { Authorization: 'Bearer ' + token },
       muteHttpExceptions: true,
     });
 
     if (resp.getResponseCode() !== 200) {
-      Logger.log('Errore API stazioni: ' + resp.getContentText());
+      Logger.log('[' + cfg.key + '] Errore API stazioni: ' + resp.getContentText());
       return;
     }
 
     const body    = JSON.parse(resp.getContentText()).body;
     const device  = (body.devices || [])[0];
-    if (!device) { Logger.log('Dispositivo non trovato nella risposta.'); return; }
+    if (!device) { Logger.log('[' + cfg.key + '] Dispositivo non trovato nella risposta.'); return; }
 
-    const module  = device.modules.find(m => m._id === moduleId);
-    if (!module)  { Logger.log('Modulo esterno non trovato.'); return; }
-
-    const dash      = module.dashboard_data;
-    const timestamp = new Date(dash.time_utc * 1000);
-    const temp      = dash.Temperature;
-    const hum       = dash.Humidity;
-
-    // Pioggia da NAModule3 (rain gauge) — 0 se non presente o offline
-    const rainMod = device.modules.find(m => m.type === 'NAModule3');
-    if (rainMod && !props.getProperty('RAIN_MODULE_ID')) {
-      props.setProperty('RAIN_MODULE_ID', rainMod._id);
-    }
-    const rain    = (rainMod && rainMod.dashboard_data)
-                    ? (rainMod.dashboard_data.sum_rain_1 != null ? rainMod.dashboard_data.sum_rain_1
-                       : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
-                    : 0;
-    if (rainMod) {
-      const rd = rainMod.dashboard_data;
-      Logger.log('NAModule3 trovato: ' + (rainMod.module_name || rainMod._id) +
-                 ' | sum_rain_1=' + (rd ? rd.sum_rain_1 : 'N/A (no dashboard_data)') +
-                 ' Rain=' + (rd ? rd.Rain : 'N/A') + ' mm | reachable=' + rainMod.reachable);
+    // Source dei sensori: per STUDIO usa la base NAMain (device.dashboard_data),
+    // per ESTERNO usa il modulo NAModule1 (module.dashboard_data).
+    let sourceDash;
+    if (cfg.isMain) {
+      sourceDash = device.dashboard_data;
+      if (!sourceDash) { Logger.log('[' + cfg.key + '] NAMain dashboard_data assente'); return; }
     } else {
-      const tipi = device.modules.map(m => m.type).join(', ');
-      Logger.log('NAModule3 NON trovato. Moduli presenti: ' + tipi);
+      const module = device.modules.find(m => m._id === cfg.moduleId);
+      if (!module) { Logger.log('[' + cfg.key + '] Modulo esterno non trovato.'); return; }
+      sourceDash = module.dashboard_data;
+      if (!sourceDash) { Logger.log('[' + cfg.key + '] NAModule1 dashboard_data assente'); return; }
+    }
+    const timestamp = new Date(sourceDash.time_utc * 1000);
+    const temp      = sourceDash.Temperature;
+    const hum       = sourceDash.Humidity;
+    const co2       = cfg.isMain && sourceDash.CO2 != null ? sourceDash.CO2 : null;
+
+    // Pioggia: solo per ESTERNO (NAMain non ha pluviometro). 0 anche se NAModule3 non presente/offline.
+    let rain = 0;
+    if (!cfg.isMain) {
+      const rainMod = device.modules.find(m => m.type === 'NAModule3');
+      if (rainMod && !cfg.rainModuleId) {
+        props.setProperty('RAIN_MODULE_ID', rainMod._id);
+        cfg.rainModuleId = rainMod._id;
+      }
+      rain = (rainMod && rainMod.dashboard_data)
+             ? (rainMod.dashboard_data.sum_rain_1 != null ? rainMod.dashboard_data.sum_rain_1
+                : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
+             : 0;
+      if (rainMod) {
+        const rd = rainMod.dashboard_data;
+        Logger.log('[' + cfg.key + '] NAModule3: ' + (rainMod.module_name || rainMod._id) +
+                   ' | sum_rain_1=' + (rd ? rd.sum_rain_1 : 'N/A') +
+                   ' | reachable=' + rainMod.reachable);
+      }
     }
 
-    // Pressione da NAMain (stazione base indoor) — hPa
+    // Pressione: sempre da NAMain (anche per ESTERNO usa device.dashboard_data — è la stessa stazione)
     const press = (device.dashboard_data && device.dashboard_data.Pressure != null)
                   ? device.dashboard_data.Pressure : null;
 
     const ss    = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = getOrCreateDataSheet(ss);
+    const sheet = getOrCreateDataSheet(ss, cfg.dataSheetName);
 
     // Salta se il dato è già presente (stesso minuto)
     const lastRow = sheet.getLastRow();
     if (lastRow > 1) {
       const lastTs = sheet.getRange(lastRow, 1).getValue();
       if (lastTs instanceof Date && Math.abs(lastTs - timestamp) < 60000) {
-        Logger.log('Dato già presente, skip.');
+        Logger.log('[' + cfg.key + '] Dato già presente, skip.');
         return;
       }
     }
 
-    sheet.appendRow([timestamp, temp, hum, rain, press]);
-    Logger.log('Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
+    // Schema righe diverse: Studio 4 col (T/H/CO2), Esterno 5 col (T/H/Pioggia/Pressione)
+    if (cfg.isMain) {
+      sheet.appendRow([timestamp, temp, hum, co2]);
+      Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% CO2=' + co2 + 'ppm');
+    } else {
+      sheet.appendRow([timestamp, temp, hum, rain, press]);
+      Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
+    }
 
-    // Aggiorna cache pioggia giornaliera (max 1 volta ogni 30 min)
-    const rainModuleId = props.getProperty('RAIN_MODULE_ID') || (rainMod ? rainMod._id : null);
-    if (rainModuleId) updateRainDailyCacheIfNeeded(deviceId, rainModuleId, token);
+    // Invalida cache JSON specifica di questa stazione
+    _cacheInvalidate(cfg.key);
 
-    updateDashboard();
+    // Aggiorna cache pioggia giornaliera (max 1 volta ogni 30 min) — solo Esterno ha NAModule3
+    if (!cfg.isMain) {
+      const rainMod2 = device.modules.find(m => m.type === 'NAModule3');
+      const rainModuleId = cfg.rainModuleId || (rainMod2 ? rainMod2._id : null);
+      if (rainModuleId) updateRainDailyCacheIfNeeded(cfg.deviceId, rainModuleId, token, cfg.rainCacheKey);
+    }
+
+    if (cfg.hasFoglio1) {
+      // Solo STUDIO ha Foglio1 → archivia mese precedente come prima
+      archiviaMesePrecedente();
+      updateDashboard();
+    } else {
+      updateDashboard(cfg.key);
+    }
 
   } catch (err) {
     Logger.log('Errore fetchAndSaveData: ' + err.toString());
   }
+}
+
+// Wrapper per il trigger della "stazione" Studio (in realtà NAMain dello stesso device)
+function fetchAndSaveDataStudio() {
+  fetchAndSaveData('STUDIO');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -552,7 +743,7 @@ function importHistoricalData() {
   );
 
   try {
-    _doImport(startDate);
+    _doImport(startDate, 'AZIENDA');
     ui.alert('✅ Import completato! Controlla il foglio Dati.');
   } catch (err) {
     ui.alert('❌ Errore durante l\'import:\n' + err.toString());
@@ -560,12 +751,33 @@ function importHistoricalData() {
   }
 }
 
-function _doImport(startDate) {
-  const props    = PropertiesService.getScriptProperties();
-  const deviceId = props.getProperty('DEVICE_ID');
-  const moduleId = props.getProperty('MODULE_ID');
+// Import 30 giorni "Studio" (NAMain) — Luca 29/05/2026
+function importHistoricalDataStudio() {
+  const ui  = SpreadsheetApp.getUi();
+  const cfg = _stationCfg('STUDIO');
+  if (!cfg.deviceId) {
+    ui.alert('Stazione non configurata. Prima esegui setup (step 1-2).');
+    return;
+  }
+  const startDate = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+  startDate.setHours(0,0,0,0);
+  ui.alert('Import Studio (interno)', 'Importerò gli ultimi 30 giorni (scale 30min) di ' + cfg.deviceName + ' (NAMain).\nControlla i log per lo stato.', ui.ButtonSet.OK);
+  try {
+    _doImport(startDate, 'STUDIO');
+    ui.alert('✅ Import Studio completato! Foglio "' + cfg.dataSheetName + '" popolato.');
+  } catch(err) {
+    ui.alert('❌ Errore import Studio:\n' + err.toString());
+    Logger.log('Errore importHistoricalDataStudio: ' + err);
+  }
+}
+
+function _doImport(startDate, stationKey) {
+  const cfg      = _stationCfg(stationKey);
+  const deviceId = cfg.deviceId;
+  // Per NAMain (Studio interno): getmeasure usa module_id = device_id
+  const moduleId = cfg.isMain ? cfg.deviceId : cfg.moduleId;
   const ss       = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet    = getOrCreateDataSheet(ss);
+  const sheet    = getOrCreateDataSheet(ss, cfg.dataSheetName);
 
   // Prendi il timestamp più recente già presente nel foglio
   let importFrom = startDate;
@@ -586,11 +798,12 @@ function _doImport(startDate) {
     const chunkEnd = new Date(Math.min(current.getTime() + STEP_MS, endDate.getTime()));
     const token    = getValidToken();
 
+    const types = cfg.isMain ? 'Temperature,Humidity,CO2' : 'Temperature,Humidity';
     const params =
       'device_id='  + encodeURIComponent(deviceId) +
       '&module_id=' + encodeURIComponent(moduleId) +
       '&scale=30min' +
-      '&type=Temperature,Humidity' +
+      '&type=' + types +
       '&date_begin=' + Math.floor(current.getTime() / 1000) +
       '&date_end='   + Math.floor(chunkEnd.getTime() / 1000) +
       '&optimize=false' +
@@ -602,25 +815,45 @@ function _doImport(startDate) {
     });
 
     if (resp.getResponseCode() === 200) {
-      const body   = JSON.parse(resp.getContentText()).body || [];
+      const body   = JSON.parse(resp.getContentText()).body;
       const newRows = [];
 
-      body.forEach(chunk => {
-        const begTime  = chunk.beg_time;
-        const stepTime = chunk.step_time || 1800;
-        (chunk.value || []).forEach((pair, i) => {
-          if (pair[0] !== null && pair[1] !== null) {
-            newRows.push([
-              new Date((begTime + i * stepTime) * 1000),
-              pair[0], // Temperature
-              pair[1], // Humidity
-            ]);
+      // Gestisce entrambi i formati: array di chunk (default) o oggetto {timestamp: [val...]}.
+      // Per Studio (isMain) i value sono [T, H, CO2], per Esterno [T, H].
+      const pushRow = (ts, vals) => {
+        if (cfg.isMain) {
+          if (vals[0] != null && vals[1] != null) {
+            newRows.push([new Date(ts), vals[0], vals[1], vals[2] != null ? vals[2] : null]);
+          }
+        } else {
+          if (vals[0] != null && vals[1] != null) {
+            newRows.push([new Date(ts), vals[0], vals[1]]);
+          }
+        }
+      };
+
+      if (Array.isArray(body)) {
+        body.forEach(chunk => {
+          const begTime  = chunk.beg_time;
+          const stepTime = chunk.step_time || 1800;
+          (chunk.value || []).forEach((tuple, i) => {
+            if (tuple) pushRow((begTime + i * stepTime) * 1000, tuple);
+          });
+        });
+      } else if (body && typeof body === 'object') {
+        Object.keys(body).forEach(tsStr => {
+          const ts  = parseInt(tsStr);
+          const val = body[tsStr];
+          if (Array.isArray(val)) pushRow(ts * 1000, val);
+          else if (typeof val === 'object') {
+            pushRow(ts * 1000, [val.Temperature, val.Humidity, val.CO2]);
           }
         });
-      });
+      }
 
       if (newRows.length > 0) {
-        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 3).setValues(newRows);
+        const nCols = cfg.isMain ? 4 : 3;
+        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, nCols).setValues(newRows);
         totalRows += newRows.length;
       }
 
@@ -635,11 +868,13 @@ function _doImport(startDate) {
 
   // Ordina per data crescente
   if (sheet.getLastRow() > 2) {
-    sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).sort(1);
+    const nCols = cfg.isMain ? 4 : 3;
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, nCols).sort(1);
   }
 
-  Logger.log('Import totale: ' + totalRows + ' righe.');
-  updateDashboard();
+  Logger.log('[' + cfg.key + '] Import totale: ' + totalRows + ' righe.');
+  _cacheInvalidate(cfg.key);
+  updateDashboard(cfg.key);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -802,10 +1037,11 @@ function _doRecoverRain(deviceId, startDate, endDate) {
 // DASHBOARD
 // ─────────────────────────────────────────────────────────────
 
-function updateDashboard() {
+function updateDashboard(stationKey) {
+  const cfg       = _stationCfg(stationKey);
   const ss        = SpreadsheetApp.getActiveSpreadsheet();
-  const dash      = ss.getSheetByName(CFG.DASHBOARD_SHEET) || ss.insertSheet(CFG.DASHBOARD_SHEET);
-  const dataSheet = ss.getSheetByName(CFG.DATA_SHEET);
+  const dash      = ss.getSheetByName(cfg.dashSheetName) || ss.insertSheet(cfg.dashSheetName);
+  const dataSheet = ss.getSheetByName(cfg.dataSheetName);
   const now       = new Date();
   const MESI      = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno',
                      'Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
@@ -819,8 +1055,8 @@ function updateDashboard() {
   }
   const last = liveRecords.length ? liveRecords[liveRecords.length - 1] : null;
 
-  // ── Leggi dati storici mensili da Foglio 1 ──
-  const storici = leggiDatiStorici();
+  // ── Storici mensili da Foglio 1 SOLO per stazione STUDIO (la AZIENDA non ha pregressi) ──
+  const storici = cfg.hasFoglio1 ? leggiDatiStorici() : {};
 
   // ── Costruisci mappa unificata: { anno: { mese: {tMin,tMedia,tMax,hMin,hMedia,hMax,pioggia,fonte} } } ──
   // Prima carica tutto da Foglio 1
@@ -898,7 +1134,10 @@ function updateDashboard() {
   }
 
   // ── TITOLO ──
-  merge(R,1,8,'🌡️  CLIMA — STAZIONE ESTERNA','#1a73e8','#ffffff',true,16,'center');
+  const titolo = cfg.key === 'STUDIO'
+    ? '🌡️  CLIMA — STUDIO (interno NAMain)'
+    : '🌡️  CLIMA — STAZIONE ESTERNA (NAModule1)';
+  merge(R,1,8, titolo,'#1a73e8','#ffffff',true,16,'center');
   dash.setRowHeight(R, 42); R++;
 
   // ── ULTIMO VALORE LIVE ──
@@ -910,7 +1149,10 @@ function updateDashboard() {
   R++; // spazio
 
   // ── RECORD STORICI ──
-  merge(R,1,8,'🏆  RECORD STORICI (2020 → oggi)','#37474f','#ffffff',true,11,'left'); R++;
+  const labelRecord = cfg.hasFoglio1
+    ? '🏆  RECORD STORICI (2020 → oggi)'
+    : '🏆  RECORD (dati raw disponibili in ' + cfg.dataSheetName + ')';
+  merge(R,1,8, labelRecord,'#37474f','#ffffff',true,11,'left'); R++;
   const hdrs = ['','Valore','Periodo','','','','',''];
   hdrs.forEach((h,i) => cell(R,i+1,h,'#cfd8dc',null,true,9,'center'));
   dash.getRange(R,1).setHorizontalAlignment('left'); R++;
@@ -978,20 +1220,44 @@ function updateDashboard() {
 // ─────────────────────────────────────────────────────────────
 
 function setupTrigger() {
-  ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'fetchAndSaveData')
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers
+    .filter(t => ['fetchAndSaveData','fetchAndSaveDataStudio'].includes(t.getHandlerFunction()))
     .forEach(t => ScriptApp.deleteTrigger(t));
 
+  // Esterno (NAModule1) → trigger sempre
   ScriptApp.newTrigger('fetchAndSaveData').timeBased().everyMinutes(CFG.INTERVAL_MIN).create();
+  // Studio (NAMain) → trigger sempre (è lo stesso device)
+  ScriptApp.newTrigger('fetchAndSaveDataStudio').timeBased().everyMinutes(CFG.INTERVAL_MIN).create();
 
-  SpreadsheetApp.getUi().alert('✅ Aggiornamento automatico attivo ogni ' + CFG.INTERVAL_MIN + ' minuti.');
+  SpreadsheetApp.getUi().alert(
+    '✅ Aggiornamento attivo ogni ' + CFG.INTERVAL_MIN + ' min su:\n' +
+    '• Esterno (NAModule1) → foglio Dati\n' +
+    '• Studio (NAMain)     → foglio Dati_Studio'
+  );
 }
 
 function removeTrigger() {
   ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'fetchAndSaveData')
+    .filter(t => ['fetchAndSaveData','fetchAndSaveDataStudio'].includes(t.getHandlerFunction()))
     .forEach(t => ScriptApp.deleteTrigger(t));
-  SpreadsheetApp.getUi().alert('Trigger rimosso. I dati non verranno più aggiornati automaticamente.');
+  SpreadsheetApp.getUi().alert('Trigger rimossi (esterno + studio).');
+}
+
+// Esegue una rilevazione del device Netatmo collegato (riusa detectStations)
+function rilevaStazioni() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    detectStations(getValidToken());
+    const props = PropertiesService.getScriptProperties();
+    ui.alert('✅ Device rilevato:\n\n' +
+      'Nome: ' + props.getProperty('DEVICE_NAME') + '\n' +
+      'Modulo esterno (NAModule1): ' + (props.getProperty('MODULE_NAME') || 'non trovato') + '\n' +
+      'NAMain (Studio interno) → automatico\n' +
+      'Pluviometro (NAModule3): ' + (props.getProperty('RAIN_MODULE_ID') ? '✓' : 'non trovato'));
+  } catch(e) {
+    ui.alert('❌ Errore: ' + e.message);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1001,22 +1267,30 @@ function removeTrigger() {
 function showStatus() {
   const props    = PropertiesService.getScriptProperties();
   const expiry   = props.getProperty('TOKEN_EXPIRY');
-  const triggers = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'fetchAndSaveData');
+  const trigExt    = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'fetchAndSaveData');
+  const trigStudio = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'fetchAndSaveDataStudio');
 
-  const ss        = SpreadsheetApp.getActiveSpreadsheet();
-  const dataSheet = ss.getSheetByName(CFG.DATA_SHEET);
-  const rows      = dataSheet ? Math.max(0, dataSheet.getLastRow() - 1) : 0;
+  const ss         = SpreadsheetApp.getActiveSpreadsheet();
+  const cfgExt     = _stationCfg('ESTERNO');
+  const cfgStudio  = _stationCfg('STUDIO');
+  const dataExt    = ss.getSheetByName(cfgExt.dataSheetName);
+  const dataStudio = ss.getSheetByName(cfgStudio.dataSheetName);
+  const rowsExt    = dataExt    ? Math.max(0, dataExt.getLastRow() - 1)    : 0;
+  const rowsStudio = dataStudio ? Math.max(0, dataStudio.getLastRow() - 1) : 0;
 
   SpreadsheetApp.getUi().alert('Stato Sistema', [
     'CLIENT_ID:       ' + (props.getProperty('CLIENT_ID')     ? '✅' : '❌ mancante'),
     'CLIENT_SECRET:   ' + (props.getProperty('CLIENT_SECRET') ? '✅' : '❌ mancante'),
     'Refresh token:   ' + (props.getProperty('REFRESH_TOKEN') ? '✅' : '❌ mancante (autorizza)'),
     'Token scade:     ' + (expiry ? new Date(parseInt(expiry)).toLocaleString('it-IT') : '—'),
-    'DEVICE_ID:       ' + (props.getProperty('DEVICE_ID')   || '—'),
-    'MODULE esterno:  ' + (props.getProperty('MODULE_NAME') || '—'),
-    '─────────────────────',
-    'Record nel foglio: ' + rows,
-    'Trigger attivo:  ' + (triggers.length ? '✅ ogni ' + CFG.INTERVAL_MIN + ' min' : '❌'),
+    '─── ESTERNO (NAModule1) ───',
+    'DEVICE:          ' + (cfgExt.deviceId ? props.getProperty('DEVICE_NAME') + ' (' + cfgExt.deviceId + ')' : '—'),
+    'MODULO esterno:  ' + (props.getProperty('MODULE_NAME') || '—'),
+    'Record foglio:   ' + rowsExt,
+    'Trigger attivo:  ' + (trigExt.length ? '✅ ogni ' + CFG.INTERVAL_MIN + ' min' : '❌'),
+    '─── STUDIO (NAMain interno) ───',
+    'Record foglio:   ' + rowsStudio,
+    'Trigger attivo:  ' + (trigStudio.length ? '✅ ogni ' + CFG.INTERVAL_MIN + ' min' : '❌'),
     '─────────────────────',
     'Web App URL:',
     getWebAppUrl(),
@@ -1027,24 +1301,28 @@ function showStatus() {
 // UTILITY
 // ─────────────────────────────────────────────────────────────
 
-function getOrCreateDataSheet(ss) {
-  let sheet = ss.getSheetByName(CFG.DATA_SHEET);
-  const HEADERS = ['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)', 'Pressione (hPa)'];
+function getOrCreateDataSheet(ss, sheetName) {
+  const name = sheetName || CFG.DATA_SHEET;
+  const isStudio = name === 'Dati_Studio';
+  let sheet = ss.getSheetByName(name);
+  // Schema dedicato per Studio (NAMain interno): no pioggia/pressione, sì CO2
+  const HEADERS = isStudio
+    ? ['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'CO2 (ppm)']
+    : ['Data/Ora', 'Temperatura (°C)', 'Umidità (%)', 'Pioggia (mm)', 'Pressione (hPa)'];
   if (!sheet) {
-    sheet = ss.insertSheet(CFG.DATA_SHEET);
-    sheet.getRange(1, 1, 1, 5).setValues([HEADERS]).setFontWeight('bold').setBackground('#e8eaf6');
+    sheet = ss.insertSheet(name);
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setFontWeight('bold').setBackground('#e8eaf6');
     sheet.setColumnWidth(1, 180);
     sheet.setColumnWidth(2, 140);
     sheet.setColumnWidth(3, 120);
     sheet.setColumnWidth(4, 120);
-    sheet.setColumnWidth(5, 130);
+    if (!isStudio) sheet.setColumnWidth(5, 130);
     sheet.getRange('A2:A').setNumberFormat('dd/MM/yyyy HH:mm');
     sheet.getRange('B2:B').setNumberFormat('0.0');
     sheet.getRange('C2:C').setNumberFormat('0');
-    sheet.getRange('D2:D').setNumberFormat('0.0');
-    sheet.getRange('E2:E').setNumberFormat('0.0');
+    sheet.getRange('D2:D').setNumberFormat(isStudio ? '0' : '0.0');  // CO2 intero, pioggia con decimale
+    if (!isStudio) sheet.getRange('E2:E').setNumberFormat('0.0');
   } else {
-    // Aggiorna intestazioni mancanti (es. colonne aggiunte dopo la creazione iniziale del foglio)
     HEADERS.forEach((h, i) => {
       const c = sheet.getRange(1, i + 1);
       if (c.getValue() !== h) c.setValue(h).setFontWeight('bold').setBackground('#e8eaf6');
@@ -1078,6 +1356,120 @@ function autorizzaScript() {
   Logger.log('✅ Script autorizzato!');
   Logger.log('Redirect URI per Netatmo: ' + url);
   Logger.log('Ora torna sul foglio → menu 🌡️ Clima → step 1, 2, 3');
+}
+
+// ─────────────────────────────────────────────────────────────
+// ARCHIVIAZIONE AUTOMATICA MESE PRECEDENTE IN FOGLIO 1
+// ─────────────────────────────────────────────────────────────
+
+function archiviaMesePrecedente() {
+  const ui   = SpreadsheetApp.getUi();
+  const now  = new Date();
+  const d    = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const anno = d.getFullYear();
+  const mese = d.getMonth(); // 0-based
+
+  const MESI = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno',
+                'Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
+  const meseName = MESI[mese] + ' ' + anno;
+
+  try {
+
+  // Già presente in Foglio1 con dati reali? Niente da fare.
+  const storici = leggiDatiStorici();
+  if (storici[anno] && storici[anno][mese] && storici[anno][mese].tMedia !== null) {
+    ui.alert('ℹ️ ' + meseName + ' è già presente in Foglio1 con dati.');
+    return;
+  }
+
+  // Leggi tutti i record del mese dal foglio Dati
+  const ss        = SpreadsheetApp.getActiveSpreadsheet();
+  const dataSheet = ss.getSheetByName(CFG.DATA_SHEET);
+  if (!dataSheet || dataSheet.getLastRow() < 2) {
+    ui.alert('❌ Foglio Dati non trovato o vuoto.');
+    return;
+  }
+
+  const rows = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 5).getValues()
+    .filter(r => r[0] instanceof Date && r[0].getFullYear() === anno && r[0].getMonth() === mese
+                 && r[1] !== '' && !isNaN(parseFloat(r[1])));
+
+  if (!rows.length) {
+    ui.alert('❌ Nessun dato trovato in Dati per ' + meseName + '.');
+    return;
+  }
+
+  const temps = rows.map(r => parseFloat(r[1]));
+  const hums  = rows.map(r => parseFloat(r[2]));
+  const dps   = rows.map(r => {
+    const t = parseFloat(r[1]), h = parseFloat(r[2]);
+    const a = 17.27, b = 237.3;
+    const alpha = (a * t / (b + t)) + Math.log(h / 100);
+    return b * alpha / (a - alpha);
+  });
+  const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
+
+  // Pioggia dalla cache giornaliera
+  const rainDailyMap = getRainDailyMap();
+  const giorni = Object.keys(rainDailyMap).filter(k => {
+    const dd = new Date(k); return dd.getFullYear() === anno && dd.getMonth() === mese;
+  });
+  const pioggia = giorni.length
+    ? Math.round(giorni.reduce((s, k) => s + (rainDailyMap[k] || 0), 0) * 10) / 10
+    : null;
+
+  const newRow = [
+    MESI[mese],
+    +avg(temps).toFixed(2),
+    +Math.min(...temps).toFixed(1),
+    +Math.max(...temps).toFixed(1),
+    +avg(hums).toFixed(1),
+    +Math.min(...hums).toFixed(1),
+    +Math.max(...hums).toFixed(1),
+    pioggia,
+    +avg(dps).toFixed(2),
+    +Math.min(...dps).toFixed(1),
+    +Math.max(...dps).toFixed(1),
+  ];
+
+  // Scrivi in Foglio1: cerca la riga esistente del mese, altrimenti aggiungi
+  const sheet     = ss.getSheetByName('Foglio1') || ss.getSheetByName('Foglio 1') || ss.getSheets()[0];
+  const sheetData = sheet.getDataRange().getValues();
+
+  let annoRow  = -1;
+  let meseRow  = -1; // riga (0-based) già esistente con il nome del mese
+  let nextAnnoRow = sheetData.length;
+  for (let i = 0; i < sheetData.length; i++) {
+    const v = String(sheetData[i][0]).trim();
+    if (v === String(anno))      { annoRow = i; }
+    else if (annoRow >= 0 && v === MESI[mese]) { meseRow = i; }
+    else if (annoRow >= 0 && /^\d{4}$/.test(v)) { nextAnnoRow = i; break; }
+  }
+
+  if (meseRow >= 0) {
+    // Riga del mese già presente (ma vuota): aggiorna i valori
+    sheet.getRange(meseRow + 1, 1, 1, newRow.length).setValues([newRow]);
+  } else if (annoRow < 0) {
+    // Anno non esiste ancora: aggiungi in fondo
+    sheet.appendRow([String(anno)]);
+    sheet.appendRow(newRow);
+  } else if (nextAnnoRow >= sheetData.length) {
+    // Anno esiste ed è l'ultimo: appendi in fondo
+    sheet.appendRow(newRow);
+  } else {
+    // Inserisci prima del prossimo anno (1-based)
+    sheet.insertRowBefore(nextAnnoRow + 1);
+    sheet.getRange(nextAnnoRow + 1, 1, 1, newRow.length).setValues([newRow]);
+  }
+
+  Logger.log('archiviaMesePrecedente: salvato ' + meseName + ' in Foglio1.');
+  updateDashboard();
+  ui.alert('✅ ' + meseName + ' salvato in Foglio1 e Dashboard aggiornato (' + rows.length + ' record elaborati).');
+
+  } catch(e) {
+    ui.alert('❌ Errore: ' + e.message);
+    Logger.log('archiviaMesePrecedente errore: ' + e);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
