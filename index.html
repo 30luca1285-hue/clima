@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.2</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.3</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -231,7 +231,7 @@
     <div class="card-title">Pioggia cumulativa — progressione annuale (mm)</div>
     <div class="chart-wrap h260"><canvas id="c-anno-rain-cumul"></canvas></div>
   </div>
-  <div class="card">
+  <div class="card" id="card-anno-rd">
     <div class="card-title">Punto di rugiada mensile (°C)</div>
     <div class="chart-wrap h260"><canvas id="c-anno-rd"></canvas></div>
   </div>
@@ -265,9 +265,13 @@
       <div class="card-title">Umidità — ogni 30 min (%)</div>
       <div class="chart-wrap h260"><canvas id="c-periodo-hum"></canvas></div>
     </div>
-    <div class="card">
+    <div class="card" id="card-periodo-rd">
       <div class="card-title">Punto di rugiada — ogni 30 min (°C)</div>
       <div class="chart-wrap h260"><canvas id="c-periodo-rd"></canvas></div>
+    </div>
+    <div id="card-periodo-co2" class="card" style="display:none">
+      <div class="card-title">CO2 — qualità aria, ogni 30 min (ppm)</div>
+      <div class="chart-wrap h260"><canvas id="c-periodo-co2"></canvas></div>
     </div>
     <div id="card-periodo-rain" class="card" style="display:none">
       <div class="card-title">Pioggia — mm ultima ora per campione &nbsp;<span id="periodo-rain-total" style="font-weight:400;color:var(--muted);font-size:.85em"></span></div>
@@ -752,18 +756,22 @@ function renderAnno() {
     scales:{ x:AXIS.x(), y:AXIS.y(' mm',{y:{min:0}}) },
   });
 
-  // Punto di rugiada
-  const rdMin  = MESI_F.map((_,i) => m[i]?m[i].rdMin :null);
-  const rdMed  = MESI_F.map((_,i) => m[i]?m[i].rdMedia:null);
-  const rdMax  = MESI_F.map((_,i) => m[i]?m[i].rdMax :null);
-  mkChart('c-anno-rd','line',{ labels:MESI_F, datasets:[
-    { label:'RD.max',   data:rdMax, borderColor:'#a855f760', backgroundColor:'#a855f712', fill:'+1', borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
-    { label:'RD.media', data:rdMed, borderColor:'#a855f7',   backgroundColor:'transparent', fill:false, borderWidth:2.5, pointRadius:4, pointBackgroundColor:'#a855f7', tension:0.3, spanGaps:true },
-    { label:'RD.min',   data:rdMin, borderColor:'#a855f760', fill:false, borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
-  ]},{
-    ...CHART_DEFAULTS,
-    scales:{ x:AXIS.x(), y:AXIS.y('°') },
-  });
+  // Punto di rugiada — solo Esterno (nascosto per lo Studio interno)
+  const isStudio = currentStation === 'studio';
+  document.getElementById('card-anno-rd').style.display = isStudio ? 'none' : '';
+  if (!isStudio) {
+    const rdMin  = MESI_F.map((_,i) => m[i]?m[i].rdMin :null);
+    const rdMed  = MESI_F.map((_,i) => m[i]?m[i].rdMedia:null);
+    const rdMax  = MESI_F.map((_,i) => m[i]?m[i].rdMax :null);
+    mkChart('c-anno-rd','line',{ labels:MESI_F, datasets:[
+      { label:'RD.max',   data:rdMax, borderColor:'#a855f760', backgroundColor:'#a855f712', fill:'+1', borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
+      { label:'RD.media', data:rdMed, borderColor:'#a855f7',   backgroundColor:'transparent', fill:false, borderWidth:2.5, pointRadius:4, pointBackgroundColor:'#a855f7', tension:0.3, spanGaps:true },
+      { label:'RD.min',   data:rdMin, borderColor:'#a855f760', fill:false, borderDash:[4,4], borderWidth:1.2, pointRadius:0, tension:0.3, spanGaps:true },
+    ]},{
+      ...CHART_DEFAULTS,
+      scales:{ x:AXIS.x(), y:AXIS.y('°') },
+    });
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -834,16 +842,38 @@ function renderPeriodo() {
     scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('%',{y:{min:0,max:100}}) },
   });
 
-  mkChart('c-periodo-rd','line',{ labels, datasets:[
-    { label:'Punto di rugiada °C', data:data.map(r=>dewPt(r.t,r.h)),
-      borderColor:'#a855f7', backgroundColor:'#a855f718',
-      fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
-  ]},{
-    ...CHART_DEFAULTS,
-    plugins:{ legend:{labels:{color:'#94a3b8'}},
-      tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
-    scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
-  });
+  // Punto di rugiada — solo Esterno (per lo Studio interno conta la CO2, non la rugiada)
+  const isStudio = currentStation === 'studio';
+  document.getElementById('card-periodo-rd').style.display = isStudio ? 'none' : '';
+  if (!isStudio) {
+    mkChart('c-periodo-rd','line',{ labels, datasets:[
+      { label:'Punto di rugiada °C', data:data.map(r=>dewPt(r.t,r.h)),
+        borderColor:'#a855f7', backgroundColor:'#a855f718',
+        fill:true, tension:0.2, pointRadius:0, borderWidth:1.8 },
+    ]},{
+      ...CHART_DEFAULTS,
+      plugins:{ legend:{labels:{color:'#94a3b8'}},
+        tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'°C'}} },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y('°') },
+    });
+  }
+
+  // CO2 — solo Studio (qualità aria, ppm). Soglie ASHRAE: <800 buona, 800-1200 media, oltre scarsa.
+  const co2Data = data.map(r => r.co2 != null ? r.co2 : null);
+  const hasCo2  = co2Data.some(v => v !== null);
+  document.getElementById('card-periodo-co2').style.display = hasCo2 ? '' : 'none';
+  if (hasCo2) {
+    mkChart('c-periodo-co2','line',{ labels, datasets:[
+      { label:'CO2 ppm', data:co2Data,
+        borderColor:'#eab308', backgroundColor:'#eab30818',
+        fill:true, tension:0.2, pointRadius:0, borderWidth:1.8, spanGaps:true },
+    ]},{
+      ...CHART_DEFAULTS,
+      plugins:{ legend:{labels:{color:'#94a3b8'}},
+        tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y.toFixed(0)+' ppm'}} },
+      scales:{ x:AXIS.x({xticks:{maxTicksLimit:14}}), y:AXIS.y(' ppm',{y:{min:0}}) },
+    });
+  }
 
   // Pioggia — sum_rain_1 come area curve (intensità nel tempo, stile Netatmo/MyAtmo)
   // Il totale è calcolato dai totali giornalieri accurati (getmeasure) in D.giornaliero
