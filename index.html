@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.3</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.4</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -198,11 +198,11 @@
     <div class="card-title">Temperatura media mensile — tutti gli anni</div>
     <div class="chart-wrap h420"><canvas id="c-overview"></canvas></div>
   </div>
-  <div class="card">
+  <div class="card" id="card-rain-yr">
     <div class="card-title">Pioggia totale annuale (mm)</div>
     <div class="chart-wrap h260"><canvas id="c-rain-yr"></canvas></div>
   </div>
-  <div class="card">
+  <div class="card" id="card-rain-cumul">
     <div class="card-title">Pioggia cumulativa per anno — confronto multi-anno (mm)</div>
     <div class="chart-wrap h300"><canvas id="c-rain-cumul"></canvas></div>
   </div>
@@ -223,11 +223,11 @@
     <div class="card-title">Umidità mensile</div>
     <div class="chart-wrap h260"><canvas id="c-anno-hum"></canvas></div>
   </div>
-  <div class="card">
+  <div class="card" id="card-anno-rain">
     <div class="card-title">Pioggia mensile (mm)</div>
     <div class="chart-wrap h260"><canvas id="c-anno-rain"></canvas></div>
   </div>
-  <div class="card">
+  <div class="card" id="card-anno-rain-cumul">
     <div class="card-title">Pioggia cumulativa — progressione annuale (mm)</div>
     <div class="chart-wrap h260"><canvas id="c-anno-rain-cumul"></canvas></div>
   </div>
@@ -550,10 +550,13 @@ setInterval(updateSyncStatus, 60000);
 // ══════════════════════════════════════════════════════════════
 function renderPanoramica() {
   const anni = anniSorted();
+  const isStudio = currentStation === 'studio';
+  // Pioggia: solo Esterno (lo Studio interno non ha pluviometro)
+  document.getElementById('card-rain-yr').style.display    = isStudio ? 'none' : '';
+  document.getElementById('card-rain-cumul').style.display = isStudio ? 'none' : '';
   renderStatsGrid(anni);
   renderOverviewChart(anni);
-  renderRainYrChart(anni);
-  renderRainCumulChart(anni);
+  if (!isStudio) { renderRainYrChart(anni); renderRainCumulChart(anni); }
   renderAnnualTable(anni);
 }
 
@@ -772,6 +775,10 @@ function renderAnno() {
       scales:{ x:AXIS.x(), y:AXIS.y('°') },
     });
   }
+
+  // Pioggia: nascosta per lo Studio interno (no pluviometro)
+  document.getElementById('card-anno-rain').style.display       = isStudio ? 'none' : '';
+  document.getElementById('card-anno-rain-cumul').style.display = isStudio ? 'none' : '';
 }
 
 // ══════════════════════════════════════════════════════════════
