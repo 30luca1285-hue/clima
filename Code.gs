@@ -421,7 +421,9 @@ function serveJsonData(stationKey) {
         const [yrN, mN] = key.split('-').map(Number);
         const yr = String(yrN);
         if (!mensile[yr]) mensile[yr] = {};
-        if (!mensile[yr][mN]) {
+        // Ricalcola dai dati grezzi se il mese manca OPPURE se la riga c'è ma è
+        // vuota (placeholder in Foglio1 senza valori reali: tMedia null).
+        if (!mensile[yr][mN] || mensile[yr][mN].tMedia == null) {
           const mr    = raw.filter(r => { const d = new Date(r.ts); return d.getFullYear() === yrN && d.getMonth() === mN; });
           const temps = mr.map(r => r.t);
           const hums  = mr.map(r => r.h);
@@ -690,13 +692,9 @@ function fetchAndSaveData(stationKey) {
       if (rainModuleId) updateRainDailyCacheIfNeeded(cfg.deviceId, rainModuleId, token, cfg.rainCacheKey);
     }
 
-    if (cfg.hasFoglio1) {
-      // Solo STUDIO ha Foglio1 → archivia mese precedente come prima
-      archiviaMesePrecedente();
-      updateDashboard();
-    } else {
-      updateDashboard(cfg.key);
-    }
+    // Dashboard della stazione (Esterno e Studio). L'archiviazione mensile in Foglio1
+    // resta azione MANUALE da menu: niente getUi() nel percorso automatico dei trigger.
+    updateDashboard(cfg.key);
 
   } catch (err) {
     Logger.log('Errore fetchAndSaveData: ' + err.toString());
@@ -1222,26 +1220,29 @@ function updateDashboard(stationKey) {
 function setupTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
   triggers
-    .filter(t => ['fetchAndSaveData','fetchAndSaveDataStudio'].includes(t.getHandlerFunction()))
+    .filter(t => ['fetchAndSaveData','fetchAndSaveDataStudio','archiviaMeseAuto'].includes(t.getHandlerFunction()))
     .forEach(t => ScriptApp.deleteTrigger(t));
 
   // Esterno (NAModule1) → trigger sempre
   ScriptApp.newTrigger('fetchAndSaveData').timeBased().everyMinutes(CFG.INTERVAL_MIN).create();
   // Studio (NAMain) → trigger sempre (è lo stesso device)
   ScriptApp.newTrigger('fetchAndSaveDataStudio').timeBased().everyMinutes(CFG.INTERVAL_MIN).create();
+  // Archiviazione mensile → il 1° del mese alle 2:00 riassume in Foglio1 il mese precedente
+  ScriptApp.newTrigger('archiviaMeseAuto').timeBased().onMonthDay(1).atHour(2).create();
 
   SpreadsheetApp.getUi().alert(
     '✅ Aggiornamento attivo ogni ' + CFG.INTERVAL_MIN + ' min su:\n' +
     '• Esterno (NAModule1) → foglio Dati\n' +
-    '• Studio (NAMain)     → foglio Dati_Studio'
+    '• Studio (NAMain)     → foglio Dati_Studio\n' +
+    '• Archivio mensile (1° del mese, ore 2:00)'
   );
 }
 
 function removeTrigger() {
   ScriptApp.getProjectTriggers()
-    .filter(t => ['fetchAndSaveData','fetchAndSaveDataStudio'].includes(t.getHandlerFunction()))
+    .filter(t => ['fetchAndSaveData','fetchAndSaveDataStudio','archiviaMeseAuto'].includes(t.getHandlerFunction()))
     .forEach(t => ScriptApp.deleteTrigger(t));
-  SpreadsheetApp.getUi().alert('Trigger rimossi (esterno + studio).');
+  SpreadsheetApp.getUi().alert('Trigger rimossi (esterno + studio + archivio mensile).');
 }
 
 // Esegue una rilevazione del device Netatmo collegato (riusa detectStations)
@@ -1362,32 +1363,24 @@ function autorizzaScript() {
 // ARCHIVIAZIONE AUTOMATICA MESE PRECEDENTE IN FOGLIO 1
 // ─────────────────────────────────────────────────────────────
 
-function archiviaMesePrecedente() {
-  const ui   = SpreadsheetApp.getUi();
-  const now  = new Date();
-  const d    = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const anno = d.getFullYear();
-  const mese = d.getMonth(); // 0-based
-
+// Core archiviazione mensile (NO UI → eseguibile anche da trigger).
+// dryRun = true → calcola e ritorna i valori SENZA scrivere in Foglio1.
+function archiviaMese(anno, mese, dryRun) {
   const MESI = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno',
                 'Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
   const meseName = MESI[mese] + ' ' + anno;
 
-  try {
-
   // Già presente in Foglio1 con dati reali? Niente da fare.
   const storici = leggiDatiStorici();
   if (storici[anno] && storici[anno][mese] && storici[anno][mese].tMedia !== null) {
-    ui.alert('ℹ️ ' + meseName + ' è già presente in Foglio1 con dati.');
-    return;
+    return { ok: true, skip: true, mese: meseName, msg: 'già presente con dati' };
   }
 
   // Leggi tutti i record del mese dal foglio Dati
   const ss        = SpreadsheetApp.getActiveSpreadsheet();
   const dataSheet = ss.getSheetByName(CFG.DATA_SHEET);
   if (!dataSheet || dataSheet.getLastRow() < 2) {
-    ui.alert('❌ Foglio Dati non trovato o vuoto.');
-    return;
+    return { ok: false, mese: meseName, msg: 'Foglio Dati non trovato o vuoto' };
   }
 
   const rows = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, 5).getValues()
@@ -1395,8 +1388,7 @@ function archiviaMesePrecedente() {
                  && r[1] !== '' && !isNaN(parseFloat(r[1])));
 
   if (!rows.length) {
-    ui.alert('❌ Nessun dato trovato in Dati per ' + meseName + '.');
-    return;
+    return { ok: false, mese: meseName, record: 0, msg: 'nessun dato grezzo nel foglio Dati per il mese' };
   }
 
   const temps = rows.map(r => parseFloat(r[1]));
@@ -1409,7 +1401,7 @@ function archiviaMesePrecedente() {
   });
   const avg = arr => arr.reduce((a, b) => a + b) / arr.length;
 
-  // Pioggia dalla cache giornaliera
+  // Pioggia dalla cache giornaliera (Esterno)
   const rainDailyMap = getRainDailyMap();
   const giorni = Object.keys(rainDailyMap).filter(k => {
     const dd = new Date(k); return dd.getFullYear() === anno && dd.getMonth() === mese;
@@ -1431,6 +1423,23 @@ function archiviaMesePrecedente() {
     +Math.min(...dps).toFixed(1),
     +Math.max(...dps).toFixed(1),
   ];
+
+  // Giorni effettivamente coperti (per verificare la completezza del mese)
+  const giorniSet = {};
+  rows.forEach(r => { giorniSet[r[0].getDate()] = true; });
+  const giorniNum = Object.keys(giorniSet).map(Number);
+  const esito = {
+    ok: true, mese: meseName, record: rows.length,
+    giorniCoperti: giorniNum.length,
+    primoGiorno: Math.min.apply(null, giorniNum),
+    ultimoGiorno: Math.max.apply(null, giorniNum),
+    tMedia: newRow[1], tMin: newRow[2], tMax: newRow[3], pioggia: pioggia
+  };
+
+  if (dryRun) {
+    esito.dryRun = true;
+    return esito;
+  }
 
   // Scrivi in Foglio1: cerca la riga esistente del mese, altrimenti aggiungi
   const sheet     = ss.getSheetByName('Foglio1') || ss.getSheetByName('Foglio 1') || ss.getSheets()[0];
@@ -1462,14 +1471,28 @@ function archiviaMesePrecedente() {
     sheet.getRange(nextAnnoRow + 1, 1, 1, newRow.length).setValues([newRow]);
   }
 
-  Logger.log('archiviaMesePrecedente: salvato ' + meseName + ' in Foglio1.');
-  updateDashboard();
-  ui.alert('✅ ' + meseName + ' salvato in Foglio1 e Dashboard aggiornato (' + rows.length + ' record elaborati).');
+  _cacheInvalidate('ESTERNO');
+  Logger.log('archiviaMese: salvato ' + meseName + ' in Foglio1 (' + rows.length + ' record).');
+  return esito;
+}
 
-  } catch(e) {
-    ui.alert('❌ Errore: ' + e.message);
-    Logger.log('archiviaMesePrecedente errore: ' + e);
-  }
+// Voce di menu: archivia il mese precedente (con alert UI).
+function archiviaMesePrecedente() {
+  const ui  = SpreadsheetApp.getUi();
+  const now = new Date();
+  const d   = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const r   = archiviaMese(d.getFullYear(), d.getMonth(), false);
+  if (r.skip)    ui.alert('ℹ️ ' + r.mese + ' è già presente in Foglio1 con dati.');
+  else if (r.ok) ui.alert('✅ ' + r.mese + ' salvato in Foglio1 (' + r.record + ' record elaborati).');
+  else           ui.alert('❌ ' + r.mese + ': ' + r.msg);
+}
+
+// Trigger mensile: archivia il mese precedente senza UI (gira il 1° del mese).
+function archiviaMeseAuto() {
+  const now = new Date();
+  const d   = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const r   = archiviaMese(d.getFullYear(), d.getMonth(), false);
+  Logger.log('archiviaMeseAuto: ' + JSON.stringify(r));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1503,8 +1526,11 @@ function leggiDatiStorici() {
       return;
     }
     if (anno && MESI.includes(prima)) {
+      const tMedia = parseN(row[1]);
+      // Salta le righe-placeholder vuote (mesi non ancora archiviati): niente barre a 0
+      if (tMedia === null) return;
       result[anno][MESI.indexOf(prima)] = {
-        tMedia:  parseN(row[1]),
+        tMedia:  tMedia,
         tMin:    parseN(row[2]),
         tMax:    parseN(row[3]),
         hMedia:  parseN(row[4]),
