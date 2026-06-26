@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.5</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.6</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -479,13 +479,7 @@ function init() {
   // Header
   if (D.attuale) {
     const t = D.attuale.t, h = D.attuale.h, ts = new Date(D.attuale.ts);
-    document.getElementById('hdr-t').textContent  = t.toFixed(1) + ' °C';
-    document.getElementById('hdr-h').textContent  = h.toFixed(0) + ' %';
-    document.getElementById('hdr-ts').textContent = ts.toLocaleString('it-IT');
-    document.getElementById('hdr-t').style.color =
-      t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
-    // Temperatura di ieri alla stessa ora (24h fa, punto più vicino nel raw)
-    const elY = document.getElementById('hdr-yesterday');
+    // Punto di 24h fa (ieri alla stessa ora) — riusato per T, umidità, pressione
     const targetY = D.attuale.ts - 24 * 3600 * 1000;
     let bestY = null, bestDiffY = Infinity;
     for (const r of (D.raw || [])) {
@@ -493,7 +487,21 @@ function init() {
       const diff = Math.abs(r.ts - targetY);
       if (diff < bestDiffY) { bestDiffY = diff; bestY = r; }
     }
-    if (bestY && bestDiffY <= 75 * 60 * 1000) {
+    const yOk = bestY && bestDiffY <= 75 * 60 * 1000;
+    // confronto inline "ieri X ▲/▼ ±Δ" per umidità e pressione
+    const cmp = (cur, prev, dec) => {
+      if (prev == null) return '';
+      const d = cur - prev, eps = dec ? 0.05 : 0.5;
+      const arr = d > eps ? '▲' : d < -eps ? '▼' : '=';
+      return ' <span style="font-size:.62rem;color:var(--muted);font-weight:400">ieri ' + prev.toFixed(dec) + ' ' + arr + (d >= 0 ? '+' : '') + d.toFixed(dec) + '</span>';
+    };
+    document.getElementById('hdr-t').textContent  = t.toFixed(1) + ' °C';
+    document.getElementById('hdr-t').style.color =
+      t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
+    document.getElementById('hdr-ts').textContent = ts.toLocaleString('it-IT');
+    // Temperatura di ieri alla stessa ora (riga dedicata sotto la temp)
+    const elY = document.getElementById('hdr-yesterday');
+    if (yOk) {
       const ty = bestY.t, dY = t - ty;
       const arrow = dY > 0.05 ? '▲' : dY < -0.05 ? '▼' : '=';
       const colY  = dY > 0.05 ? 'var(--hot)' : dY < -0.05 ? 'var(--cold)' : 'var(--muted)';
@@ -502,8 +510,11 @@ function init() {
     } else {
       elY.style.display = 'none';
     }
+    // Umidità + confronto ieri (in %)
+    document.getElementById('hdr-h').innerHTML = h.toFixed(0) + ' %' + (yOk ? cmp(h, bestY.h, 0) : '');
+    // Pressione + confronto ieri (in hPa)
     if (D.attuale.press != null) {
-      document.getElementById('hdr-press').textContent = D.attuale.press.toFixed(1) + ' hPa';
+      document.getElementById('hdr-press').innerHTML = D.attuale.press.toFixed(1) + ' hPa' + (yOk ? cmp(D.attuale.press, bestY.press, 1) : '');
     }
     // CO2 solo se presente (tab Studio)
     const elCo2 = document.getElementById('hdr-co2');
