@@ -152,13 +152,14 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.6</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.7</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
     <div class="live-temp" id="hdr-t">—</div>
     <div>
       <div class="live-meta" id="hdr-yesterday" style="display:none;font-weight:600"></div>
+      <div class="live-meta" id="hdr-minmax" style="display:none;font-weight:600"></div>
       <div class="live-hum" id="hdr-h">— %</div>
       <div class="live-meta" id="hdr-press" style="color:var(--purple)"></div>
       <div class="live-meta" id="hdr-rain" style="color:var(--cold);display:none"></div>
@@ -509,6 +510,18 @@ function init() {
       elY.style.display = '';
     } else {
       elY.style.display = 'none';
+    }
+    // Min/Max temperatura delle ultime 24h (dallo storico + valore attuale)
+    const since24 = D.attuale.ts - 24 * 3600 * 1000;
+    const last24t = (D.raw || []).filter(r => r.t != null && r.ts >= since24).map(r => r.t);
+    last24t.push(t);
+    const elMM = document.getElementById('hdr-minmax');
+    if (last24t.length > 1) {
+      const tmin = Math.min(...last24t), tmax = Math.max(...last24t);
+      elMM.innerHTML = '<span style="color:var(--cold)">▼ min ' + tmin.toFixed(1) + '°</span> &nbsp; <span style="color:var(--hot)">▲ max ' + tmax.toFixed(1) + '°</span> <span style="font-size:.6rem;color:var(--muted);font-weight:400">ultime 24h</span>';
+      elMM.style.display = '';
+    } else {
+      elMM.style.display = 'none';
     }
     // Umidità + confronto ieri (in %)
     document.getElementById('hdr-h').innerHTML = h.toFixed(0) + ' %' + (yOk ? cmp(h, bestY.h, 0) : '');
