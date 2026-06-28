@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.8</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.9</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -340,6 +340,18 @@
       </div>
       <div id="conv-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Dati convettivi non disponibili (controlla la connessione).</div>
     </div>
+    <div class="card" id="card-daily10">
+      <div class="card-title">📅 Tendenza 10 giorni — modello ECMWF (Open-Meteo)</div>
+      <div id="daily10-loading" style="color:var(--muted);font-size:0.82rem;padding:8px 0">Caricamento tendenza…</div>
+      <div id="daily10-content" style="display:none">
+        <div id="daily10-strip" style="display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px"></div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:10px;line-height:1.6">
+          <span style="color:var(--text)">● Giorni 1–3</span>: previsione attendibile &nbsp;·&nbsp;
+          <span style="opacity:.5">▦ Giorni 4–10</span>: <b style="color:var(--text)">tendenza orientativa</b>, non una certezza — utile per farsi un'idea, da ricontrollare il giorno prima.
+        </div>
+      </div>
+      <div id="daily10-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Tendenza a 10 giorni non disponibile (controlla la connessione).</div>
+    </div>
     <div class="card">
       <div class="card-title">Pressione SLP — ultime 12 ore (hPa)</div>
       <div class="chart-wrap h200"><canvas id="c-prev-press"></canvas></div>
@@ -372,7 +384,8 @@
         <b style="color:var(--text)">Probabilità pioggia:</b> calcolata su 4 fattori — pressione assoluta, tendenza, umidità relativa, spread T–Td (punto di rugiada).<br>
         <b style="color:var(--text)">Base nubi stimata:</b> ogni 1°C di spread T–Td corrisponde a ~125 m di base delle nubi.<br>
         <b style="color:var(--text)">Temporali convettivi (Open-Meteo):</b> CAPE = energia convettiva disponibile (>300 J/kg = instabile, >1000 = forte, >2500 = estremo) · LI = indice di sollevamento (negativo = instabile) · CIN = inibizione convettiva (frena i temporali anche con CAPE alto).<br>
-        <span style="color:var(--accent)">Il nowcast usa solo dati Netatmo locali. Gli indici convettivi vengono dal modello ECMWF via Open-Meteo (gratuito, aggiornato ogni 15 min).</span>
+        <b style="color:var(--text)">Tendenza 10 giorni (Open-Meteo/ECMWF):</b> i primi 3 giorni sono previsione attendibile; dal 4° al 10° è solo una tendenza orientativa (affidabilità in calo) — utile per farsi un'idea, non per decisioni certe.<br>
+        <span style="color:var(--accent)">Il nowcast usa solo dati Netatmo locali. Gli indici convettivi e la tendenza 10 giorni vengono dal modello ECMWF via Open-Meteo (gratuito, aggiornato ogni 15 min).</span>
       </div>
     </div>
   </div>
@@ -1188,8 +1201,9 @@ function renderPrevisioni() {
     return `<div class="stat"><div class="stat-label">${w.label}</div><div class="stat-val" style="font-size:1rem;color:${color}">${arrow} ${sign}${w.delta} hPa</div></div>`;
   }).join('');
 
-  // Avvia fetch indici convettivi (async, non bloccante)
+  // Avvia fetch indici convettivi + tendenza 10 giorni (async, non bloccanti)
   fetchAndRenderConvective();
+  fetchAndRenderDaily10();
 
   // ── Sparkline pressione SLP ultime 12h ──
   const cutoff12h = last => last.ts - 12 * 3600 * 1000;
@@ -1360,6 +1374,61 @@ async function fetchAndRenderConvective() {
     errorEl.style.display   = '';
     ecmwfLoad.style.display = 'none';
     ecmwfErr.style.display  = '';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// TENDENZA 10 GIORNI — Open-Meteo / ECMWF (daily)
+// ══════════════════════════════════════════════════════════════
+async function fetchAndRenderDaily10() {
+  const loadEl = document.getElementById('daily10-loading');
+  const contEl = document.getElementById('daily10-content');
+  const errEl  = document.getElementById('daily10-error');
+  loadEl.style.display = ''; contEl.style.display = 'none'; errEl.style.display = 'none';
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast' +
+      '?latitude=43.6&longitude=13.5' +
+      '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max' +
+      '&forecast_days=10&timezone=Europe%2FRome';
+    const res  = await fetch(url);
+    const data = await res.json();
+    const d = data.daily;
+    if (!d || !d.time || !d.time.length) throw new Error('no daily');
+
+    const GG  = ['Dom','Lun','Mar','Mer','Gio','Ven','Sab'];
+    const DIV = '<div style="flex-shrink:0;width:1px;background:var(--border);margin:6px 4px;align-self:stretch"></div>';
+
+    document.getElementById('daily10-strip').innerHTML = d.time.map((iso, i) => {
+      const dt    = new Date(iso + 'T12:00:00');
+      const dow   = i === 0 ? 'Oggi' : GG[dt.getDay()];
+      const dm    = dt.getDate() + '/' + (dt.getMonth() + 1);
+      const icon  = wmoIcon(d.weather_code[i] ?? 0);
+      const tmax  = d.temperature_2m_max[i] != null ? Math.round(d.temperature_2m_max[i]) + '°' : '—';
+      const tmin  = d.temperature_2m_min[i] != null ? Math.round(d.temperature_2m_min[i]) + '°' : '—';
+      const mm    = d.precipitation_sum[i] != null ? d.precipitation_sum[i] : 0;
+      const pp    = d.precipitation_probability_max[i] ?? 0;
+      const wind  = d.wind_speed_10m_max[i] != null ? Math.round(d.wind_speed_10m_max[i]) : null;
+      const ppCol = pp >= 60 ? 'var(--hot)' : pp >= 30 ? 'var(--orange)' : 'var(--muted)';
+      const trend = i >= 3;                              // giorni 4–10 = tendenza orientativa
+      const op    = trend ? 0.5 : 1;
+      const bg    = i === 0 ? '#2d3f55' : 'var(--card)';
+      const bord  = trend ? '1px dashed var(--border)' : '1px solid var(--border)';
+      const tile  = `<div style="text-align:center;min-width:74px;padding:10px 6px;background:${bg};border:${bord};border-radius:10px;flex-shrink:0;opacity:${op}">
+          <div style="font-size:0.72rem;color:${i===0?'var(--text)':'var(--muted)'};font-weight:${i===0?'700':'600'}">${dow}</div>
+          <div style="font-size:0.62rem;color:var(--muted)">${dm}</div>
+          <div style="font-size:1.6rem;margin:5px 0;line-height:1">${icon}</div>
+          <div style="font-size:0.84rem;font-weight:700"><span class="hot">${tmax}</span><span style="color:var(--muted);font-weight:400"> /${tmin}</span></div>
+          <div style="font-size:0.70rem;color:${ppCol};margin-top:4px">💧${mm > 0 ? mm + ' mm' : '—'} · ${pp}%</div>
+          ${wind != null ? `<div style="font-size:0.62rem;color:var(--muted);margin-top:2px">💨 ${wind} km/h</div>` : ''}
+        </div>`;
+      return (i === 3 ? DIV : '') + tile;               // divisore netto tra previsione (1-3) e tendenza (4-10)
+    }).join('');
+
+    loadEl.style.display = 'none';
+    contEl.style.display = '';
+  } catch(e) {
+    loadEl.style.display = 'none';
+    errEl.style.display  = '';
   }
 }
 
