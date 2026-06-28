@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.7</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.8</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -244,7 +244,7 @@
   <div class="card" style="margin-bottom:20px">
     <div class="period-picker">
       <div id="period-presets" class="selector" style="margin:0">
-        <button class="sel-btn" data-days="1" onclick="setPeriod(1,this)">Oggi</button>
+        <button class="sel-btn" data-days="1" onclick="setPeriod(1,this)">Ultime 24h</button>
         <button class="sel-btn active" data-days="3" onclick="setPeriod(3,this)">3 giorni</button>
         <button class="sel-btn" data-days="7" onclick="setPeriod(7,this)">7 giorni</button>
         <button class="sel-btn" data-days="30" onclick="setPeriod(30,this)">30 giorni</button>
@@ -401,6 +401,7 @@ const AXIS = {
 };
 
 let D = null;        // dati globali
+let period24h = false; // preset "Ultime 24h": filtro mobile -24h invece che per data
 let CY = null;       // anno selezionato
 let charts = {};
 let rendered = {};   // sezioni già renderizzate
@@ -836,25 +837,33 @@ function dewPt(t, h) {
 function setPeriod(days, btn) {
   document.querySelectorAll('#period-presets .sel-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  period24h = (days === 1);   // il preset "Ultime 24h" usa un filtro orario mobile
   const to   = new Date();
   const from = new Date();
-  from.setDate(from.getDate() - (days - 1));
+  from.setDate(from.getDate() - (period24h ? 1 : days - 1));
   document.getElementById('p-from').value = from.toISOString().slice(0, 10);
   document.getElementById('p-to').value   = to.toISOString().slice(0, 10);
   renderPeriodo();
 }
 
 function customPeriod() {
+  period24h = false;   // scelta manuale di date → disattiva la modalità 24h
   document.querySelectorAll('#period-presets .sel-btn').forEach(b => b.classList.remove('active'));
   renderPeriodo();
 }
 
 function renderPeriodo() {
   const rawAll  = D.raw || [];
-  const fromVal = document.getElementById('p-from').value;
-  const toVal   = document.getElementById('p-to').value;
-  const fromMs  = fromVal ? new Date(fromVal + 'T00:00:00').getTime() : 0;
-  const toMs    = toVal   ? new Date(toVal   + 'T23:59:59').getTime() : Infinity;
+  let fromMs, toMs;
+  if (period24h) {                       // ultime 24 ore mobili
+    toMs   = Date.now();
+    fromMs = toMs - 24 * 3600 * 1000;
+  } else {
+    const fromVal = document.getElementById('p-from').value;
+    const toVal   = document.getElementById('p-to').value;
+    fromMs = fromVal ? new Date(fromVal + 'T00:00:00').getTime() : 0;
+    toMs   = toVal   ? new Date(toVal   + 'T23:59:59').getTime() : Infinity;
+  }
   const data    = rawAll.filter(r => r.ts >= fromMs && r.ts <= toMs);
 
   const empty  = document.getElementById('periodo-empty');
