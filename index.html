@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.9</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.10</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -867,15 +867,18 @@ function customPeriod() {
 
 function renderPeriodo() {
   const rawAll  = D.raw || [];
-  let fromMs, toMs;
+  let fromMs, toMs, fromDay, toDay;
+  const _dayKey = ms => { const d = new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   if (period24h) {                       // ultime 24 ore mobili
     toMs   = Date.now();
     fromMs = toMs - 24 * 3600 * 1000;
+    fromDay = _dayKey(fromMs);
+    toDay   = _dayKey(toMs);
   } else {
-    const fromVal = document.getElementById('p-from').value;
-    const toVal   = document.getElementById('p-to').value;
-    fromMs = fromVal ? new Date(fromVal + 'T00:00:00').getTime() : 0;
-    toMs   = toVal   ? new Date(toVal   + 'T23:59:59').getTime() : Infinity;
+    fromDay = document.getElementById('p-from').value;
+    toDay   = document.getElementById('p-to').value;
+    fromMs = fromDay ? new Date(fromDay + 'T00:00:00').getTime() : 0;
+    toMs   = toDay   ? new Date(toDay   + 'T23:59:59').getTime() : Infinity;
   }
   const data    = rawAll.filter(r => r.ts >= fromMs && r.ts <= toMs);
 
@@ -954,7 +957,7 @@ function renderPeriodo() {
   document.getElementById('card-periodo-rain').style.display = hasRainP ? '' : 'none';
   if (hasRainP) {
     const totalMm = (D.giornaliero || [])
-      .filter(g => g.data >= fromVal && g.data <= toVal)
+      .filter(g => (!fromDay || g.data >= fromDay) && (!toDay || g.data <= toDay))
       .reduce((s, g) => s + (g.pioggia || 0), 0);
     document.getElementById('periodo-rain-total').textContent = totalMm > 0 ? '— Totale: ' + totalMm.toFixed(1) + ' mm' : '';
     mkChart('c-periodo-rain', 'line', { labels, datasets: [
