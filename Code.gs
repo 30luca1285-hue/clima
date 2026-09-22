@@ -166,6 +166,9 @@ function doGet(e) {
 
   if (params.code)                   return handleOAuthCallback(params.code);
   if (params.action === 'getData')   return serveJsonData(params.station);
+  // Storico giornaliero per i periodi lunghi (3/6/12 mesi). Sta FUORI da getData apposta:
+  // caricarlo sempre rallenterebbe l'apertura dell'app, e serve solo se si preme quei tasti.
+  if (params.action === 'getStorico') return serveStoricoGiornaliero(params.station, params.giorni);
   if (params.action === 'listStations') return listStationsJson();
   if (params.action === 'clearCache') {
     _cacheInvalidate('STUDIO');
@@ -281,7 +284,9 @@ function getRainDailyMap(stationKey) {
 
 const CACHE_KEY   = 'CLIMA_JSON';
 const CACHE_CHUNK = 90000; // byte per chunk (limite CacheService: 100 KB)
-const CACHE_TTL   = 540;   // secondi (9 minuti)
+const CACHE_TTL   = 1800;  // secondi (30 min). Era 540 = 9 min, cioè MENO dei 10 minuti
+                           // del trigger: la cache scadeva sempre prima di essere riscritta e
+                           // ogni apertura dell'app pagava i 30-45 s della ricostruzione.
 
 function _cacheKeyFor(stationKey) {
   const sk = (stationKey || 'AZIENDA').toUpperCase();
@@ -333,6 +338,76 @@ function _cacheInvalidate(stationKey) {
 
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Storico GIORNALIERO per i periodi lunghi (3 mesi / 6 mesi / 1 anno).
+ *
+ * Perché non basta `getData`: quello serve i dati grezzi degli ultimi 30 giorni (un punto ogni
+ * ~10 minuti, 4.148 record). Su un anno sarebbero oltre 50.000 punti: app lentissima e grafico
+ * illeggibile. Qui si aggrega per giorno — 365 punti — e i grafici restano leggibili.
+ *
+ * I dati vecchi nel foglio ci sono: il taglio a 30 giorni di `serveJsonData` è solo in lettura,
+ * niente viene mai cancellato.
+ *
+ * Risposta: array di { ts, t, h, p, press } — la STESSA forma dei record grezzi, così il
+ * frontend disegna senza dover distinguere la fonte. `t`/`h` sono medie del giorno, `p` è il
+ * totale di pioggia, e si aggiungono tMin/tMax per chi li vuole mostrare.
+ */
+function serveStoricoGiornaliero(stationKey, giorniParam) {
+  const cfg = _stationCfg(stationKey);
+  const giorni = Math.min(Math.max(parseInt(giorniParam, 10) || 365, 1), 400);
+  // ⚠️ Cache PROPRIA, non `_cacheRead/_cacheWrite`: quelle ignorano la chiave che ricevono
+  // (`_cacheKeyFor` mappa tutto su STUDIO o sul default) e sovrascriverebbero la cache dei
+  // dati principali, rompendo l'app. Qui una chiave dedicata, ~45 KB, sta in un solo blocco.
+  const cacheKey = 'STORICO_' + cfg.key + '_' + giorni;
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(cacheKey);
+  if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+
+  // come in serveJsonData: lo script è legato al foglio, e il nome del tab sta nella config
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dataSheet = ss.getSheetByName(cfg.dataSheetName);
+  const out = [];
+  if (dataSheet && dataSheet.getLastRow() > 1) {
+    const cutoff = new Date(Date.now() - giorni * 24 * 3600 * 1000);
+    const lastRow = dataSheet.getLastRow();
+    // ~144 rilevazioni al giorno + margine: si legge solo quel che serve, non tutto il foglio
+    const righe = Math.min(lastRow - 1, giorni * 200);
+    const startRow = Math.max(2, lastRow - righe + 1);
+    const nCols = cfg.isMain ? 4 : 5;
+    const valori = dataSheet.getRange(startRow, 1, lastRow - startRow + 1, nCols).getValues();
+
+    const byDay = {};
+    for (var i = 0; i < valori.length; i++) {
+      const r = valori[i];
+      if (!(r[0] instanceof Date) || r[0] < cutoff || r[1] === '' || isNaN(parseFloat(r[1]))) continue;
+      const d = r[0];
+      const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if (!byDay[key]) byDay[key] = { t: [], h: [], p: 0, press: [], ts: d.getTime() };
+      const b = byDay[key];
+      b.t.push(parseFloat(r[1]));
+      if (r[2] !== '' && !isNaN(parseFloat(r[2]))) b.h.push(parseFloat(r[2]));
+      if (!cfg.isMain) {
+        if (r[3] !== '' && !isNaN(parseFloat(r[3]))) b.p += parseFloat(r[3]);
+        if (r[4] !== '' && r[4] !== null && !isNaN(parseFloat(r[4]))) b.press.push(parseFloat(r[4]));
+      }
+    }
+    const media = a => a.length ? Math.round((a.reduce((s, v) => s + v, 0) / a.length) * 10) / 10 : null;
+    Object.keys(byDay).sort().forEach(function (k) {
+      const b = byDay[k];
+      out.push({
+        giorno: k,
+        ts: new Date(k + 'T12:00:00').getTime(),   // mezzogiorno: il punto sta al centro della giornata
+        t: media(b.t), tMin: b.t.length ? Math.min.apply(null, b.t) : null, tMax: b.t.length ? Math.max.apply(null, b.t) : null,
+        h: media(b.h), p: Math.round(b.p * 10) / 10, press: media(b.press),
+      });
+    });
+  }
+  const json = JSON.stringify({ stazione: cfg.key, giorni: giorni, punti: out.length, dati: out });
+  try { if (json.length < 95000) cache.put(cacheKey, json, 3600); } catch (e) { Logger.log('cache storico: ' + e); }
+  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+
 function serveJsonData(stationKey) {
   const cfg = _stationCfg(stationKey);
 
@@ -342,6 +417,19 @@ function serveJsonData(stationKey) {
     return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
   }
 
+  // Cache fredda: tocca ricostruire, e sono 30-45 secondi. ⚠️ Oltre i ~45 s Google smette di
+  // servire la risposta e manda la pagina Drive «Impossibile aprire il file in questo momento»
+  // (22/09/2026: l'app non caricava più). Per questo la cache la riscrive il trigger ogni
+  // 10 minuti: questo ramo è la rete di sicurezza, non la strada normale.
+  return ContentService.createTextOutput(_buildDataJson(cfg)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Costruisce il JSON completo della stazione, lo mette in cache e lo restituisce come stringa.
+ * Lo chiama il trigger dopo ogni rilevazione (così la cache è sempre calda) e, in extremis,
+ * serveJsonData quando la cache è scaduta.
+ */
+function _buildDataJson(cfg) {
   const ss        = SpreadsheetApp.getActiveSpreadsheet();
   const dataSheet = ss.getSheetByName(cfg.dataSheetName);
   // Foglio1 storico mensile è SOLO per stazione STUDIO (i suoi storici sono lì da 2020)
@@ -453,7 +541,7 @@ function serveJsonData(stationKey) {
     attuale, mensile, giornaliero, raw
   });
   _cacheWrite(json, cfg.key);
-  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+  return json;
 }
 
 function handleOAuthCallback(code) {
@@ -516,8 +604,38 @@ function handleOAuthCallback(code) {
 function saveTokens(data) {
   const props = PropertiesService.getScriptProperties();
   props.setProperty('ACCESS_TOKEN',  data.access_token);
-  props.setProperty('TOKEN_EXPIRY',  String(Date.now() + data.expires_in * 1000));
+  // ⚠️ NON fidarsi di `expires_in` alla lettera (10/08/2026): era stata salvata una scadenza al
+  // **14 agosto** mentre Netatmo invalidava il token dopo 3 ore. Risultato: `getValidToken()`
+  // credeva di averlo buono, non rinnovava più, e ogni chiamata tornava
+  // `403 · code 3 · Access token expired` — in silenzio, perché il fetch logga e basta.
+  // I token Netatmo durano 3 ore: si tiene il minore fra quanto dichiarato e 3 ore.
+  const durata = Math.min((parseInt(data.expires_in) || 10800), 10800) * 1000;
+  props.setProperty('TOKEN_EXPIRY',  String(Date.now() + durata));
   if (data.refresh_token) props.setProperty('REFRESH_TOKEN', data.refresh_token);
+}
+
+/**
+ * Chiamata all'API Netatmo che si fida della RISPOSTA, non dell'orologio:
+ * se torna 401/403 rinnova il token e ritenta una volta sola. Così una scadenza calcolata male
+ * costa una chiamata in più, non sei ore di dati persi.
+ */
+/** Lascia traccia dell'ultimo errore, così non resta solo nei log di Apps Script che nessuno apre. */
+function _segnalaGuasto(stazione, http, testo) {
+  try {
+    PropertiesService.getScriptProperties().setProperty('ULTIMO_ERRORE',
+      JSON.stringify({ quando: new Date().toISOString(), stazione: stazione, http: http, testo: String(testo).substring(0, 200) }));
+  } catch (e) { /* non deve mai far fallire il fetch */ }
+}
+
+function netatmoFetch(url) {
+  let resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + getValidToken() }, muteHttpExceptions: true });
+  const code = resp.getResponseCode();
+  if (code === 401 || code === 403) {
+    Logger.log('Netatmo ' + code + ': token rifiutato, rinnovo e ritento');
+    refreshAccessToken();
+    resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + getValidToken() }, muteHttpExceptions: true });
+  }
+  return resp;
 }
 
 function getValidToken() {
@@ -604,14 +722,14 @@ function fetchAndSaveData(stationKey) {
       return;
     }
 
-    const token = getValidToken();
-    const resp  = UrlFetchApp.fetch(API.STATIONS + '?device_id=' + encodeURIComponent(cfg.deviceId), {
-      headers: { Authorization: 'Bearer ' + token },
-      muteHttpExceptions: true,
-    });
+    const resp = netatmoFetch(API.STATIONS + '?device_id=' + encodeURIComponent(cfg.deviceId));
 
     if (resp.getResponseCode() !== 200) {
+      // ⚠️ Prima qui si usciva zitti: il 10/08/2026 la stazione è rimasta ferma 6 ore e in
+      // dashboard sembrava «offline», mentre Netatmo funzionava benissimo. Un guasto che non
+      // si vede è peggio di un guasto: ora lascia un segno sul foglio degli errori.
       Logger.log('[' + cfg.key + '] Errore API stazioni: ' + resp.getContentText());
+      _segnalaGuasto(cfg.key, resp.getResponseCode(), resp.getContentText());
       return;
     }
 
@@ -682,8 +800,8 @@ function fetchAndSaveData(stationKey) {
       Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
     }
 
-    // Invalida cache JSON specifica di questa stazione
-    _cacheInvalidate(cfg.key);
+    // La cache JSON non si invalida qui: si RIGENERA in fondo, quando anche la pioggia
+    // giornaliera e la dashboard sono aggiornate (vedi nota a fine funzione).
 
     // Aggiorna cache pioggia giornaliera (max 1 volta ogni 30 min) — solo Esterno ha NAModule3
     if (!cfg.isMain) {
@@ -695,6 +813,17 @@ function fetchAndSaveData(stationKey) {
     // Dashboard della stazione (Esterno e Studio). L'archiviazione mensile in Foglio1
     // resta azione MANUALE da menu: niente getUi() nel percorso automatico dei trigger.
     updateDashboard(cfg.key);
+
+    // Cache calda: il JSON che legge l'app lo prepara il trigger, non chi apre l'app.
+    // Senza questo, ogni apertura ricostruiva da zero (30-45 s) e spesso Google rispondeva
+    // con la pagina d'errore invece del JSON. Se il precalcolo fallisce si invalida e basta:
+    // la richiesta successiva ricostruirà per conto suo.
+    try {
+      _buildDataJson(cfg);
+    } catch (e) {
+      Logger.log('[' + cfg.key + '] Precalcolo cache JSON fallito: ' + e);
+      _cacheInvalidate(cfg.key);
+    }
 
   } catch (err) {
     Logger.log('Errore fetchAndSaveData: ' + err.toString());

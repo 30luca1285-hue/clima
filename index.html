@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.10</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.14</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -248,6 +248,9 @@
         <button class="sel-btn active" data-days="3" onclick="setPeriod(3,this)">3 giorni</button>
         <button class="sel-btn" data-days="7" onclick="setPeriod(7,this)">7 giorni</button>
         <button class="sel-btn" data-days="30" onclick="setPeriod(30,this)">30 giorni</button>
+        <button class="sel-btn" data-days="90" onclick="setPeriod(90,this)">3 mesi</button>
+        <button class="sel-btn" data-days="180" onclick="setPeriod(180,this)">6 mesi</button>
+        <button class="sel-btn" data-days="365" onclick="setPeriod(365,this)">1 anno</button>
       </div>
       <div class="period-inputs">
         <label class="period-label">Da <input type="date" id="p-from" onchange="customPeriod()"></label>
@@ -255,6 +258,7 @@
       </div>
     </div>
   </div>
+  <div id="periodo-avviso" style="display:none;margin:10px 0;padding:9px 12px;border-radius:8px;background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.35);color:#d97706;font-size:12.5px"></div>
   <div id="periodo-empty" class="empty" style="display:none">
     Nessun dato nel periodo selezionato.
   </div>
@@ -441,14 +445,48 @@ function setStation(key, btn) {
 }
 
 // ── FETCH ────────────────────────────────────────────────────
+// Quando il backend deve ricostruire i dati (cache scaduta) ci mette 30-45 secondi, e oltre
+// quella soglia Google smette di aspettare e risponde con la propria pagina «Impossibile aprire
+// il file in questo momento» al posto del JSON: l'app moriva lì, senza ritentare (22/09/2026,
+// non caricava niente). Qui si tratta di LETTURE, quindi ritentare è sicuro — e al secondo
+// giro di solito la cache è stata appena riscritta.
+async function chiediJson(url, tentativi = 3) {
+  let ultimoErrore;
+  for (let i = 1; i <= tentativi; i++) {
+    try {
+      const res   = await fetch(url);
+      const testo = await res.text();
+      if (!res.ok) throw new Error('il server ha risposto ' + res.status);
+      if (testo.trim().charAt(0) !== '{') throw new Error('il server ha mandato una pagina invece dei dati');
+      return JSON.parse(testo);
+    } catch (e) {
+      ultimoErrore = e;
+      if (i < tentativi) {
+        mostraAttesa('Il server ci sta mettendo un po\u2019… riprovo (' + i + '/' + (tentativi - 1) + ')');
+        await new Promise(r => setTimeout(r, 2500 * i));
+      }
+    }
+  }
+  throw ultimoErrore;
+}
+
+// Aggiorna il messaggio sotto lo spinner, se la schermata di caricamento è quella a video.
+function mostraAttesa(msg) {
+  const el = document.getElementById('loading');
+  if (el && el.style.display !== 'none') el.innerHTML = '<div class="loading-spinner"></div>' + msg;
+}
+
 async function load() {
   try {
-    const res = await fetch(API + '?action=getData&station=' + encodeURIComponent(currentStation));
-    D = await res.json();
+    // Si manda sempre la stessa forma del nome ('Esterno'/'Studio'): URL identica per tutti,
+    // così la cache di Google la riconosce. Il backend accetta comunque qualsiasi maiuscola.
+    const stazione = currentStation.charAt(0).toUpperCase() + currentStation.slice(1);
+    D = await chiediJson(API + '?action=getData&station=' + encodeURIComponent(stazione));
     init();
   } catch(e) {
     document.getElementById('loading').innerHTML =
-      '<p style="color:#ef4444">Errore caricamento dati:<br>' + e.message + '</p>';
+      '<p style="color:#ef4444">Errore caricamento dati:<br>' + e.message +
+      '<br><button onclick="load()" style="margin-top:12px;padding:8px 16px;border-radius:8px;border:0;background:#2563eb;color:#fff;font-size:14px">Riprova</button></p>';
   }
 }
 
@@ -847,7 +885,25 @@ function dewPt(t, h) {
   return +(b * alpha / (a - alpha)).toFixed(2);
 }
 
-function setPeriod(days, btn) {
+// ── Periodi lunghi: si disegna un punto al GIORNO, non uno ogni 10 minuti ──────────
+// I dati grezzi che l'app carica all'avvio coprono 30 giorni (4.148 punti). Su un anno
+// sarebbero oltre 50.000: app lentissima e grafico illeggibile. Oltre i 60 giorni si
+// passa quindi allo storico giornaliero, chiesto al backend SOLO quando serve
+// (`action=getStorico`) e tenuto da parte per non riscaricarlo a ogni cambio di tasto.
+const SOGLIA_GIORNALIERO = 60;
+let storicoCache = {};      // giorni → array di punti, per stazione
+let periodoLungo = null;    // array in uso adesso, oppure null = dati grezzi
+
+async function caricaStorico(giorni) {
+  const chiave = currentStation + ':' + giorni;
+  if (storicoCache[chiave]) return storicoCache[chiave];
+  const stazione = currentStation.charAt(0).toUpperCase() + currentStation.slice(1);
+  const j = await chiediJson(API + '?action=getStorico&giorni=' + giorni + '&station=' + encodeURIComponent(stazione));
+  storicoCache[chiave] = j.dati || [];
+  return storicoCache[chiave];
+}
+
+async function setPeriod(days, btn) {
   document.querySelectorAll('#period-presets .sel-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   period24h = (days === 1);   // il preset "Ultime 24h" usa un filtro orario mobile
@@ -856,17 +912,47 @@ function setPeriod(days, btn) {
   from.setDate(from.getDate() - (period24h ? 1 : days - 1));
   document.getElementById('p-from').value = from.toISOString().slice(0, 10);
   document.getElementById('p-to').value   = to.toISOString().slice(0, 10);
+
+  const avviso = document.getElementById('periodo-avviso');
+  if (avviso) avviso.style.display = 'none';
+
+  if (days > SOGLIA_GIORNALIERO) {
+    const box = document.getElementById('periodo-empty');
+    if (box) { box.style.display = ''; box.textContent = 'Carico lo storico…'; }
+    try {
+      periodoLungo = await caricaStorico(days);
+    } catch (e) {
+      periodoLungo = null;
+      if (box) { box.style.display = ''; box.textContent = 'Storico non disponibile: ' + e.message; return; }
+    }
+    // Le rilevazioni nel foglio partono dal 27/02/2026: se si chiede più indietro non
+    // esiste, e un grafico che parte a metà senza dirlo fa credere che manchi l'inverno.
+    if (periodoLungo && periodoLungo.length) {
+      const primo = periodoLungo[0].giorno;
+      if (primo && primo > document.getElementById('p-from').value && avviso) {
+        const p = primo.split('-');
+        avviso.textContent = 'Le rilevazioni disponibili partono dal ' + p[2] + '/' + p[1] + '/' + p[0] +
+                             ' (' + periodoLungo.length + ' giorni): il grafico mostra solo quelle.';
+        avviso.style.display = '';
+      }
+    }
+  } else {
+    periodoLungo = null;
+  }
   renderPeriodo();
 }
 
 function customPeriod() {
   period24h = false;   // scelta manuale di date → disattiva la modalità 24h
+  periodoLungo = null; // date scelte a mano: si torna ai dati grezzi
   document.querySelectorAll('#period-presets .sel-btn').forEach(b => b.classList.remove('active'));
   renderPeriodo();
 }
 
 function renderPeriodo() {
-  const rawAll  = D.raw || [];
+  // con un periodo lungo la fonte è lo storico giornaliero, che ha la stessa forma
+  // dei record grezzi ({ts,t,h,p,press}): da qui in giù non cambia nulla
+  const rawAll  = periodoLungo || D.raw || [];
   let fromMs, toMs, fromDay, toDay;
   const _dayKey = ms => { const d = new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   if (period24h) {                       // ultime 24 ore mobili
@@ -891,6 +977,8 @@ function renderPeriodo() {
     const d  = new Date(r.ts);
     const dd = String(d.getDate()).padStart(2,'0');
     const mm = String(d.getMonth()+1).padStart(2,'0');
+    // sui periodi lunghi ogni punto è un giorno intero: l'ora sarebbe finta (è sempre mezzogiorno)
+    if (periodoLungo) return dd+'/'+mm;
     const HH = String(d.getHours()).padStart(2,'0');
     const MM = String(d.getMinutes()).padStart(2,'0');
     return dd+'/'+mm+' '+HH+':'+MM;
