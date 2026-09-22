@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.17</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.18</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -446,54 +446,55 @@ function setStation(key, btn) {
 
 // ── FETCH ────────────────────────────────────────────────────
 // ⚠️ Il pezzo più importante dell'app: senza, non carica.
-// Misurato il 22/09/2026 sui log di Apps Script: lo script risponde in 0,6-1,4 secondi ed è
-// sempre «Completata». È la RISPOSTA che si perde per strada nell'infrastruttura di Google:
-// circa una volta su due il browser resta appeso 30-50 secondi e riceve la pagina Drive
-// «Impossibile aprire il file in questo momento» al posto del JSON. Non dipende da noi né dal
-// peso della risposta (succede anche con 13 byte), e non si aggira con un parametro anti-cache.
+// Diagnosi del 22/09/2026, misurata (non dedotta): nei log di Apps Script lo script gira in
+// 0,6-1,4 secondi ed è sempre «Completata». Il tempo se ne va PRIMA, nell'avvio dell'istanza:
+// la richiesta a /exec resta ferma 30-45 secondi prima ancora di restituire il redirect, e
+// circa una volta su due Google si arrende e manda la pagina Drive «Impossibile aprire il file
+// in questo momento» al posto del JSON. Quando invece l'istanza è già sveglia: 1,3 secondi.
+// (Prova: stessa chiamata a 45 s di distanza, 34,5 s e poi 1,35 s.)
 //
-// Aspettare in fila costava fino a un minuto (misurato: 6 s, 28 s, 62 s per tre aperture
-// identiche). Quindi non si aspetta: si lanciano più richieste sfalsate e vince la prima che
-// porta a casa i dati. Sono LETTURE, i doppioni non esistono — ⛔ su una SCRITTURA questo
-// pattern è vietato (il caso Autoveicoli/Apps Script: stessa risposta persa, righe doppie).
+// Da qui le due scelte che seguono:
+//  - il PRIMO tentativo aspetta a lungo (50 s): se l'istanza si sta svegliando, mollare non
+//    serve a niente — il tentativo dopo si rimette in coda dietro lo stesso risveglio;
+//  - i successivi sono corti, perché a quel punto l'istanza è sveglia e risponde in 1-4 s.
+// ⛔ Niente richieste in parallelo: Apps Script le esegue una alla volta, quindi si accodano
+// e basta (provato in v17.17: 18-28 s contro i 6 s del caso buono).
+// Sono LETTURE: ritentare è sicuro. Su una SCRITTURA questo pattern crea doppioni.
 async function chiediJson(url) {
-  const PARTENZE = [0, 6000, 14000, 24000];   // quando parte ogni tentativo
-  const TETTO    = 30000;                     // oltre questo un tentativo è perso
-  return new Promise((risolvi, rifiuta) => {
-    let vinto = false, falliti = 0, ultimoErrore;
-    const timer = [];
+  const TETTI = [50000, 20000, 20000, 30000];
+  let ultimoErrore;
+  for (let i = 0; i < TETTI.length; i++) {
+    const ctrl = new AbortController();
+    const stop = setTimeout(() => ctrl.abort(), TETTI[i]);
+    const conta = contaAttesa(i);
+    try {
+      const res   = await fetch(url, { signal: ctrl.signal });
+      const testo = await res.text();
+      if (!res.ok) throw new Error('il server ha risposto ' + res.status);
+      if (testo.trim().charAt(0) !== '{') throw new Error('il server ha mandato una pagina invece dei dati');
+      return JSON.parse(testo);
+    } catch (e) {
+      ultimoErrore = e.name === 'AbortError' ? new Error('il server non ha risposto in tempo') : e;
+      if (i < TETTI.length - 1) await new Promise(r => setTimeout(r, 1000));
+    } finally {
+      clearTimeout(stop);
+      clearInterval(conta);
+    }
+  }
+  throw ultimoErrore;
+}
 
-    const lancia = () => {
-      const ctrl = new AbortController();
-      const stop = setTimeout(() => ctrl.abort(), TETTO);
-      fetch(url, { signal: ctrl.signal })
-        .then(async res => {
-          const testo = await res.text();
-          if (!res.ok) throw new Error('il server ha risposto ' + res.status);
-          if (testo.trim().charAt(0) !== '{') throw new Error('il server ha mandato una pagina invece dei dati');
-          return JSON.parse(testo);
-        })
-        .then(dati => {
-          if (vinto) return;
-          vinto = true;
-          timer.forEach(clearTimeout);
-          risolvi(dati);
-        })
-        .catch(e => {
-          ultimoErrore = e.name === 'AbortError' ? new Error('il server non ha risposto in tempo') : e;
-          if (!vinto && ++falliti === PARTENZE.length) rifiuta(ultimoErrore);
-        })
-        .finally(() => clearTimeout(stop));
-    };
-
-    PARTENZE.forEach((ritardo, i) => {
-      timer.push(setTimeout(() => {
-        if (vinto) return;
-        if (i > 0) mostraAttesa('Il server ci mette un po\u2019… ci riprovo (' + (i + 1) + ')');
-        lancia();
-      }, ritardo));
-    });
-  });
+// Un'attesa muta di mezzo minuto sembra un'app rotta: dal 6° secondo si dice cosa sta
+// succedendo e si contano i secondi, così si vede che qualcosa si muove.
+function contaAttesa(tentativo) {
+  const inizio = Date.now();
+  return setInterval(() => {
+    const s = Math.round((Date.now() - inizio) / 1000);
+    if (s < 6) return;
+    mostraAttesa(tentativo === 0
+      ? 'Il server si sta svegliando… ' + s + 's'
+      : 'Ci riprovo (' + (tentativo + 1) + ')… ' + s + 's');
+  }, 1000);
 }
 
 // Aggiorna il messaggio sotto lo spinner, se la schermata di caricamento è quella a video.
