@@ -408,6 +408,47 @@ function serveStoricoGiornaliero(stationKey, giorniParam) {
 }
 
 
+/**
+ * Dirada le rilevazioni da spedire all'app. ⚠️ NON è un dettaglio estetico: il JSON viaggia
+ * attraverso l'infrastruttura di Google, e sopra i ~100 KB la consegna diventa lentissima o
+ * fallisce. Misurato il 22/09/2026 con la cache già calda (script: 1-3 s in entrambi i casi):
+ * 260 KB -> 36 s di attesa e spesso la pagina «Impossibile aprire il file in questo momento»
+ * al posto dei dati; 90 KB -> 1,9 s. I 30 giorni di rilevazioni a 10 minuti facevano da soli
+ * 280 KB dei 300 totali.
+ *
+ * Si tiene la risoluzione piena dove serve davvero e si dirada andando indietro nel tempo:
+ *   ultime 48 h -> tutti i punti (l'app confronta «ieri a quest'ora» con 75 min di tolleranza)
+ *   2-7 giorni  -> uno ogni 30 minuti
+ *   oltre       -> uno all'ora
+ * I punti scartati non si perdono del tutto: la pioggia tiene il picco dell'intervallo, così
+ * la curva di intensità non si appiattisce. E i totali giornalieri (`giornaliero`) restano
+ * calcolati su TUTTE le rilevazioni: nessun minimo, massimo o millimetro va perso.
+ */
+function _diradaRaw(raw, nowMs) {
+  const ORA = 3600 * 1000;
+  const passo = ts => {
+    const eta = nowMs - ts;
+    if (eta <= 48 * ORA)      return 0;
+    if (eta <= 7 * 24 * ORA)  return 30 * 60 * 1000;
+    return ORA;
+  };
+  const out = [];
+  let ultimoTs = null;
+  raw.forEach(r => {
+    const p = passo(r.ts);
+    if (!out.length || p === 0 || (r.ts - ultimoTs) >= p) {
+      const copia = {};
+      Object.keys(r).forEach(k => copia[k] = r[k]);
+      out.push(copia);
+      ultimoTs = r.ts;
+    } else {
+      const tenuto = out[out.length - 1];
+      if (tenuto.p != null && r.p != null && r.p > tenuto.p) tenuto.p = r.p;
+    }
+  });
+  return out;
+}
+
 function serveJsonData(stationKey) {
   const cfg = _stationCfg(stationKey);
 
@@ -538,7 +579,8 @@ function _buildDataJson(cfg) {
     aggiornato: now.getTime(),
     stazione:   cfg.key,
     nomeStazione: cfg.deviceName,
-    attuale, mensile, giornaliero, raw
+    attuale, mensile, giornaliero,
+    raw: _diradaRaw(raw, now.getTime())   // vedi _diradaRaw: sopra ~100 KB Google non consegna
   });
   _cacheWrite(json, cfg.key);
   return json;
@@ -812,18 +854,18 @@ function fetchAndSaveData(stationKey) {
 
     // Dashboard della stazione (Esterno e Studio). L'archiviazione mensile in Foglio1
     // resta azione MANUALE da menu: niente getUi() nel percorso automatico dei trigger.
-    updateDashboard(cfg.key);
-
-    // Cache calda: il JSON che legge l'app lo prepara il trigger, non chi apre l'app.
-    // Senza questo, ogni apertura ricostruiva da zero (30-45 s) e spesso Google rispondeva
-    // con la pagina d'errore invece del JSON. Se il precalcolo fallisce si invalida e basta:
-    // la richiesta successiva ricostruirà per conto suo.
+    // Cache calda: il JSON che legge l'app lo prepara il trigger, non chi apre l'app. Sta
+    // PRIMA della dashboard apposta: se updateDashboard va in errore, il catch esterno
+    // salterebbe questa riga e l'app tornerebbe a pagarsi la ricostruzione. Se il precalcolo
+    // fallisce si invalida e basta: la richiesta successiva ricostruirà per conto suo.
     try {
       _buildDataJson(cfg);
     } catch (e) {
       Logger.log('[' + cfg.key + '] Precalcolo cache JSON fallito: ' + e);
       _cacheInvalidate(cfg.key);
     }
+
+    updateDashboard(cfg.key);
 
   } catch (err) {
     Logger.log('Errore fetchAndSaveData: ' + err.toString());

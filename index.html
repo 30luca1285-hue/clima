@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.14</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.16</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -445,26 +445,35 @@ function setStation(key, btn) {
 }
 
 // ── FETCH ────────────────────────────────────────────────────
-// Quando il backend deve ricostruire i dati (cache scaduta) ci mette 30-45 secondi, e oltre
-// quella soglia Google smette di aspettare e risponde con la propria pagina «Impossibile aprire
-// il file in questo momento» al posto del JSON: l'app moriva lì, senza ritentare (22/09/2026,
-// non caricava niente). Qui si tratta di LETTURE, quindi ritentare è sicuro — e al secondo
-// giro di solito la cache è stata appena riscritta.
-async function chiediJson(url, tentativi = 3) {
+// ⚠️ Il pezzo più importante dell'app: senza, non carica.
+// Misurato il 22/09/2026 sui log di Apps Script: lo script risponde in 0,6-1,4 secondi, sempre
+// «Completata». Ma la RISPOSTA se la perde per strada l'infrastruttura di Google: circa una
+// volta su due il client resta appeso 30-50 secondi e poi riceve la pagina Drive «Impossibile
+// aprire il file in questo momento» al posto del JSON. Non dipende da noi, né dal peso della
+// risposta (succede anche con 13 byte), e non si aggira con un parametro anti-cache: provato.
+// Quindi non si aspetta il buon cuore di Google — si molla presto e si richiede: un tentativo
+// che al 12° secondo non ha risposto non risponderà più. Sono LETTURE: ritentare è sicuro
+// (⛔ su una scrittura no: crea doppioni — vedi il caso Autoveicoli/Apps Script).
+async function chiediJson(url, tentativi = 4) {
+  const tetti = [12000, 15000, 20000, 30000];   // quanto si aspetta ogni tentativo
   let ultimoErrore;
-  for (let i = 1; i <= tentativi; i++) {
+  for (let i = 0; i < tentativi; i++) {
+    const ctrl = new AbortController();
+    const stop = setTimeout(() => ctrl.abort(), tetti[i] || 30000);
     try {
-      const res   = await fetch(url);
+      const res   = await fetch(url, { signal: ctrl.signal });
       const testo = await res.text();
       if (!res.ok) throw new Error('il server ha risposto ' + res.status);
       if (testo.trim().charAt(0) !== '{') throw new Error('il server ha mandato una pagina invece dei dati');
       return JSON.parse(testo);
     } catch (e) {
-      ultimoErrore = e;
-      if (i < tentativi) {
-        mostraAttesa('Il server ci sta mettendo un po\u2019… riprovo (' + i + '/' + (tentativi - 1) + ')');
-        await new Promise(r => setTimeout(r, 2500 * i));
+      ultimoErrore = e.name === 'AbortError' ? new Error('il server non ha risposto in tempo') : e;
+      if (i < tentativi - 1) {
+        mostraAttesa('Il server ci mette un po\u2019… riprovo (' + (i + 1) + '/' + (tentativi - 1) + ')');
+        await new Promise(r => setTimeout(r, 800));
       }
+    } finally {
+      clearTimeout(stop);
     }
   }
   throw ultimoErrore;
