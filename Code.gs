@@ -284,9 +284,10 @@ function getRainDailyMap(stationKey) {
 
 const CACHE_KEY   = 'CLIMA_JSON';
 const CACHE_CHUNK = 90000; // byte per chunk (limite CacheService: 100 KB)
-const CACHE_TTL   = 1800;  // secondi (30 min). Era 540 = 9 min, cioè MENO dei 10 minuti
-                           // del trigger: la cache scadeva sempre prima di essere riscritta e
-                           // ogni apertura dell'app pagava i 30-45 s della ricostruzione.
+const CACHE_TTL   = 660;   // secondi (11 min): poco più dei 10 del trigger, che la riscrive a
+                           // ogni rilevazione. Era 540 (9 min), cioè MENO del trigger: scadeva
+                           // sempre prima di essere riscritta. Un TTL molto lungo è l'errore
+                           // opposto — la cache regge ma serve un JSON vecchio di mezz'ora.
 
 function _cacheKeyFor(stationKey) {
   const sk = (stationKey || 'AZIENDA').toUpperCase();
@@ -829,6 +830,10 @@ function fetchAndSaveData(stationKey) {
       const lastTs = sheet.getRange(lastRow, 1).getValue();
       if (lastTs instanceof Date && Math.abs(lastTs - timestamp) < 60000) {
         Logger.log('[' + cfg.key + '] Dato già presente, skip.');
+        // ⚠️ Prima si usciva e basta: se la stazione non manda niente di nuovo per un po',
+        // la cache scadeva e il primo che apriva l'app si pagava la ricostruzione. Qui non
+        // c'è niente da ricalcolare, ma la cache va tenuta in piedi.
+        try { if (!_cacheRead(cfg.key)) _buildDataJson(cfg); } catch (e) { Logger.log('[' + cfg.key + '] cache non ricostruita: ' + e); }
         return;
       }
     }
