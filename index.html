@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.16</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.17</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -446,37 +446,54 @@ function setStation(key, btn) {
 
 // ── FETCH ────────────────────────────────────────────────────
 // ⚠️ Il pezzo più importante dell'app: senza, non carica.
-// Misurato il 22/09/2026 sui log di Apps Script: lo script risponde in 0,6-1,4 secondi, sempre
-// «Completata». Ma la RISPOSTA se la perde per strada l'infrastruttura di Google: circa una
-// volta su due il client resta appeso 30-50 secondi e poi riceve la pagina Drive «Impossibile
-// aprire il file in questo momento» al posto del JSON. Non dipende da noi, né dal peso della
-// risposta (succede anche con 13 byte), e non si aggira con un parametro anti-cache: provato.
-// Quindi non si aspetta il buon cuore di Google — si molla presto e si richiede: un tentativo
-// che al 12° secondo non ha risposto non risponderà più. Sono LETTURE: ritentare è sicuro
-// (⛔ su una scrittura no: crea doppioni — vedi il caso Autoveicoli/Apps Script).
-async function chiediJson(url, tentativi = 4) {
-  const tetti = [12000, 15000, 20000, 30000];   // quanto si aspetta ogni tentativo
-  let ultimoErrore;
-  for (let i = 0; i < tentativi; i++) {
-    const ctrl = new AbortController();
-    const stop = setTimeout(() => ctrl.abort(), tetti[i] || 30000);
-    try {
-      const res   = await fetch(url, { signal: ctrl.signal });
-      const testo = await res.text();
-      if (!res.ok) throw new Error('il server ha risposto ' + res.status);
-      if (testo.trim().charAt(0) !== '{') throw new Error('il server ha mandato una pagina invece dei dati');
-      return JSON.parse(testo);
-    } catch (e) {
-      ultimoErrore = e.name === 'AbortError' ? new Error('il server non ha risposto in tempo') : e;
-      if (i < tentativi - 1) {
-        mostraAttesa('Il server ci mette un po\u2019… riprovo (' + (i + 1) + '/' + (tentativi - 1) + ')');
-        await new Promise(r => setTimeout(r, 800));
-      }
-    } finally {
-      clearTimeout(stop);
-    }
-  }
-  throw ultimoErrore;
+// Misurato il 22/09/2026 sui log di Apps Script: lo script risponde in 0,6-1,4 secondi ed è
+// sempre «Completata». È la RISPOSTA che si perde per strada nell'infrastruttura di Google:
+// circa una volta su due il browser resta appeso 30-50 secondi e riceve la pagina Drive
+// «Impossibile aprire il file in questo momento» al posto del JSON. Non dipende da noi né dal
+// peso della risposta (succede anche con 13 byte), e non si aggira con un parametro anti-cache.
+//
+// Aspettare in fila costava fino a un minuto (misurato: 6 s, 28 s, 62 s per tre aperture
+// identiche). Quindi non si aspetta: si lanciano più richieste sfalsate e vince la prima che
+// porta a casa i dati. Sono LETTURE, i doppioni non esistono — ⛔ su una SCRITTURA questo
+// pattern è vietato (il caso Autoveicoli/Apps Script: stessa risposta persa, righe doppie).
+async function chiediJson(url) {
+  const PARTENZE = [0, 6000, 14000, 24000];   // quando parte ogni tentativo
+  const TETTO    = 30000;                     // oltre questo un tentativo è perso
+  return new Promise((risolvi, rifiuta) => {
+    let vinto = false, falliti = 0, ultimoErrore;
+    const timer = [];
+
+    const lancia = () => {
+      const ctrl = new AbortController();
+      const stop = setTimeout(() => ctrl.abort(), TETTO);
+      fetch(url, { signal: ctrl.signal })
+        .then(async res => {
+          const testo = await res.text();
+          if (!res.ok) throw new Error('il server ha risposto ' + res.status);
+          if (testo.trim().charAt(0) !== '{') throw new Error('il server ha mandato una pagina invece dei dati');
+          return JSON.parse(testo);
+        })
+        .then(dati => {
+          if (vinto) return;
+          vinto = true;
+          timer.forEach(clearTimeout);
+          risolvi(dati);
+        })
+        .catch(e => {
+          ultimoErrore = e.name === 'AbortError' ? new Error('il server non ha risposto in tempo') : e;
+          if (!vinto && ++falliti === PARTENZE.length) rifiuta(ultimoErrore);
+        })
+        .finally(() => clearTimeout(stop));
+    };
+
+    PARTENZE.forEach((ritardo, i) => {
+      timer.push(setTimeout(() => {
+        if (vinto) return;
+        if (i > 0) mostraAttesa('Il server ci mette un po\u2019… ci riprovo (' + (i + 1) + ')');
+        lancia();
+      }, ritardo));
+    });
+  });
 }
 
 // Aggiorna il messaggio sotto lo spinner, se la schermata di caricamento è quella a video.
