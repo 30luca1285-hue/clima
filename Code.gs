@@ -170,6 +170,7 @@ function doGet(e) {
   // caricarlo sempre rallenterebbe l'apertura dell'app, e serve solo se si preme quei tasti.
   if (params.action === 'getStorico') return serveStoricoGiornaliero(params.station, params.giorni);
   if (params.action === 'listStations') return listStationsJson();
+  if (params.action === 'diagnostica')  return diagnosticaJson();
   if (params.action === 'clearCache') {
     _cacheInvalidate('STUDIO');
     _cacheInvalidate('AZIENDA');
@@ -193,6 +194,45 @@ function listStationsJson() {
   return ContentService
     .createTextOutput(JSON.stringify({ stazioni: out }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Stato fisico della stazione: batteria, segnale radio e ULTIMA VOLTA CHE HA PARLATO, modulo
+ * per modulo. Nato il 22/09/2026, quando il sensore esterno ha smesso di trasmettere alle 20:49
+ * mentre la base interna andava avanti: dal foglio si vede solo che «i dati non arrivano», non
+ * il perché. Con questo si sa prima di uscire con la torcia se sono le pile o il collegamento.
+ *
+ *   ?action=diagnostica  →  { moduli: [{nome, tipo, batteria, segnale, ultimoContatto, fermoDaMin}] }
+ */
+function diagnosticaJson() {
+  const props = PropertiesService.getScriptProperties();
+  const out = { chiesto: new Date().toISOString(), moduli: [] };
+  try {
+    const resp = netatmoFetch(API.STATIONS + '?device_id=' + encodeURIComponent(props.getProperty('DEVICE_ID')));
+    if (resp.getResponseCode() !== 200) {
+      out.errore = 'Netatmo ha risposto ' + resp.getResponseCode();
+      return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+    }
+    const device = JSON.parse(resp.getContentText()).body.devices[0];
+    const adesso = Math.floor(Date.now() / 1000);
+    const riga = (nome, tipo, batteriaPerc, segnale, ultimoTs) => ({
+      nome: nome, tipo: tipo,
+      batteria: batteriaPerc == null ? null : batteriaPerc,
+      segnale:  segnale == null ? null : segnale,          // rf_status: più basso = meglio (<60 buono)
+      ultimoContatto: ultimoTs ? new Date(ultimoTs * 1000).toISOString() : null,
+      fermoDaMin: ultimoTs ? Math.round((adesso - ultimoTs) / 60) : null,
+    });
+    // la base è attaccata alla corrente e al wifi: niente batteria, il segnale è quello wifi
+    out.moduli.push(riga(device.module_name || device.station_name, device.type, null,
+                         device.wifi_status, (device.dashboard_data || {}).time_utc));
+    (device.modules || []).forEach(m => {
+      out.moduli.push(riga(m.module_name, m.type, m.battery_percent, m.rf_status,
+                           (m.dashboard_data || {}).time_utc || m.last_message));
+    });
+  } catch (e) {
+    out.errore = String(e);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 
 // Aggiorna la cache pioggia giornaliera nelle ScriptProperties (max 1 volta ogni 30 min).
