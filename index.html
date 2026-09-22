@@ -152,7 +152,7 @@
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
   <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.19</span></div>
+    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.20</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
   <div class="live-block">
@@ -512,8 +512,11 @@ async function load() {
     const r = await fetch('dati-' + currentStation + '.json?t=' + Date.now(), { cache: 'no-store' });
     if (r.ok) {
       const dati = await r.json();
-      const eta  = Date.now() - (dati.attuale ? dati.attuale.ts : 0);
-      if (dati.attuale && eta < 40 * 60 * 1000) {   // oltre 40 min: o il Mac è spento o la stazione è ferma
+      // Conta da quanto è stato PUBBLICATO il file, non da quanto è vecchio il dato dentro:
+      // se la stazione si ferma, l'ultimo dato vero va mostrato subito lo stesso (l'ora esatta
+      // si legge nell'header «Aggiornato:»). Se invece è il Mac a essere spento, questo timbro
+      // invecchia e si passa alla riserva.
+      if (dati.attuale && dati.pubblicato && Date.now() - dati.pubblicato < 25 * 60 * 1000) {
         D = dati;
         init();
         return;
