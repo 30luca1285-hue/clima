@@ -1,0 +1,5 @@
+# Su Apps Script va solo il codice: icone, manifest e dati pubblicati restano su GitHub Pages.
+**/**
+!Code.gs
+!index.html
+!appsscript.json

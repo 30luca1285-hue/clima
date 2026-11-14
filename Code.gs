@@ -711,12 +711,23 @@ function _segnalaGuasto(stazione, http, testo) {
 }
 
 function netatmoFetch(url) {
-  let resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + getValidToken() }, muteHttpExceptions: true });
+  const chiama = () => UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + getValidToken() }, muteHttpExceptions: true });
+  let resp = chiama();
   const code = resp.getResponseCode();
   if (code === 401 || code === 403) {
     Logger.log('Netatmo ' + code + ': token rifiutato, rinnovo e ritento');
     refreshAccessToken();
-    resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + getValidToken() }, muteHttpExceptions: true });
+    resp = chiama();
+  }
+  // Netatmo «occupato» (HTTP 5xx, error code 27 «Service temporarily unavailable») dura pochi
+  // secondi: si riprova due volte prima di perdere il giro. Il trigger di Studio parte allo
+  // scoccare dei 10 minuti, quando Netatmo è più intasato, e così perdeva 9 giri su 10 (25/09/2026).
+  const occupato = r => r.getResponseCode() >= 500 || /"code"\s*:\s*27\b/.test(r.getContentText());
+  for (const attesa of [5000, 15000]) {
+    if (!occupato(resp)) break;
+    Logger.log('Netatmo occupato (' + resp.getResponseCode() + '): ritento fra ' + attesa / 1000 + ' s');
+    Utilities.sleep(attesa);
+    resp = chiama();
   }
   return resp;
 }
@@ -798,7 +809,6 @@ function detectStations(accessToken) {
 function fetchAndSaveData(stationKey) {
   try {
     const cfg = _stationCfg(stationKey);
-    const props = PropertiesService.getScriptProperties();
 
     if (!cfg.deviceId || !cfg.moduleId) {
       Logger.log('[' + cfg.key + '] Setup non completato: mancano DEVICE_ID o MODULE_ID.');
@@ -820,105 +830,143 @@ function fetchAndSaveData(stationKey) {
     const device  = (body.devices || [])[0];
     if (!device) { Logger.log('[' + cfg.key + '] Dispositivo non trovato nella risposta.'); return; }
 
-    // Source dei sensori: per STUDIO usa la base NAMain (device.dashboard_data),
-    // per ESTERNO usa il modulo NAModule1 (module.dashboard_data).
-    let sourceDash;
-    if (cfg.isMain) {
-      sourceDash = device.dashboard_data;
-      if (!sourceDash) { Logger.log('[' + cfg.key + '] NAMain dashboard_data assente'); return; }
-    } else {
-      const module = device.modules.find(m => m._id === cfg.moduleId);
-      if (!module) { Logger.log('[' + cfg.key + '] Modulo esterno non trovato.'); return; }
-      sourceDash = module.dashboard_data;
-      if (!sourceDash) { Logger.log('[' + cfg.key + '] NAModule1 dashboard_data assente'); return; }
-    }
-    const timestamp = new Date(sourceDash.time_utc * 1000);
-    const temp      = sourceDash.Temperature;
-    const hum       = sourceDash.Humidity;
-    const co2       = cfg.isMain && sourceDash.CO2 != null ? sourceDash.CO2 : null;
-
-    // Pioggia: solo per ESTERNO (NAMain non ha pluviometro). 0 anche se NAModule3 non presente/offline.
-    let rain = 0;
-    if (!cfg.isMain) {
-      const rainMod = device.modules.find(m => m.type === 'NAModule3');
-      if (rainMod && !cfg.rainModuleId) {
-        props.setProperty('RAIN_MODULE_ID', rainMod._id);
-        cfg.rainModuleId = rainMod._id;
-      }
-      rain = (rainMod && rainMod.dashboard_data)
-             ? (rainMod.dashboard_data.sum_rain_1 != null ? rainMod.dashboard_data.sum_rain_1
-                : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
-             : 0;
-      if (rainMod) {
-        const rd = rainMod.dashboard_data;
-        Logger.log('[' + cfg.key + '] NAModule3: ' + (rainMod.module_name || rainMod._id) +
-                   ' | sum_rain_1=' + (rd ? rd.sum_rain_1 : 'N/A') +
-                   ' | reachable=' + rainMod.reachable);
-      }
-    }
-
-    // Pressione: sempre da NAMain (anche per ESTERNO usa device.dashboard_data — è la stessa stazione)
-    const press = (device.dashboard_data && device.dashboard_data.Pressure != null)
-                  ? device.dashboard_data.Pressure : null;
-
-    const ss    = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = getOrCreateDataSheet(ss, cfg.dataSheetName);
-
-    // Salta se il dato è già presente (stesso minuto)
-    const lastRow = sheet.getLastRow();
-    if (lastRow > 1) {
-      const lastTs = sheet.getRange(lastRow, 1).getValue();
-      if (lastTs instanceof Date && Math.abs(lastTs - timestamp) < 60000) {
-        Logger.log('[' + cfg.key + '] Dato già presente, skip.');
-        // ⚠️ Prima si usciva e basta: se la stazione non manda niente di nuovo per un po',
-        // la cache scadeva e il primo che apriva l'app si pagava la ricostruzione. Qui non
-        // c'è niente da ricalcolare, ma la cache va tenuta in piedi.
-        try { if (!_cacheRead(cfg.key)) _buildDataJson(cfg); } catch (e) { Logger.log('[' + cfg.key + '] cache non ricostruita: ' + e); }
-        return;
-      }
-    }
-
-    // Schema righe diverse: Studio 4 col (T/H/CO2), Esterno 5 col (T/H/Pioggia/Pressione)
-    if (cfg.isMain) {
-      sheet.appendRow([timestamp, temp, hum, co2]);
-      Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% CO2=' + co2 + 'ppm');
-    } else {
-      sheet.appendRow([timestamp, temp, hum, rain, press]);
-      Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
-    }
-
-    // La cache JSON non si invalida qui: si RIGENERA in fondo, quando anche la pioggia
-    // giornaliera e la dashboard sono aggiornate (vedi nota a fine funzione).
-
-    // Aggiorna cache pioggia giornaliera (max 1 volta ogni 30 min) — solo Esterno ha NAModule3
-    if (!cfg.isMain) {
-      const rainMod2 = device.modules.find(m => m.type === 'NAModule3');
-      const rainModuleId = cfg.rainModuleId || (rainMod2 ? rainMod2._id : null);
-      if (rainModuleId) updateRainDailyCacheIfNeeded(cfg.deviceId, rainModuleId, token, cfg.rainCacheKey);
-    }
-
-    // Dashboard della stazione (Esterno e Studio). L'archiviazione mensile in Foglio1
-    // resta azione MANUALE da menu: niente getUi() nel percorso automatico dei trigger.
-    // Cache calda: il JSON che legge l'app lo prepara il trigger, non chi apre l'app. Sta
-    // PRIMA della dashboard apposta: se updateDashboard va in errore, il catch esterno
-    // salterebbe questa riga e l'app tornerebbe a pagarsi la ricostruzione. Se il precalcolo
-    // fallisce si invalida e basta: la richiesta successiva ricostruirà per conto suo.
-    try {
-      _buildDataJson(cfg);
-    } catch (e) {
-      Logger.log('[' + cfg.key + '] Precalcolo cache JSON fallito: ' + e);
-      _cacheInvalidate(cfg.key);
-    }
-
-    updateDashboard(cfg.key);
+    // Una sola chiamata a Netatmo per giro: la risposta contiene sia la base (Studio) sia il
+    // modulo esterno, quindi il giro dell'Esterno salva anche Studio. Prima Studio aveva un
+    // trigger suo che partiva allo scoccare dei 10 minuti, e Netatmo gli rispondeva «occupato»
+    // nove volte su dieci (25/09/2026). Studio va per primo: non dipende dal modulo esterno.
+    const stazioni = cfg.key === 'ESTERNO' ? [_stationCfg('STUDIO'), cfg] : [cfg];
+    stazioni.forEach(c => {
+      try { _salvaStazione(c, device); }
+      catch (e) { Logger.log('[' + c.key + '] Errore nel salvataggio: ' + e); _segnalaGuasto(c.key, 'eccezione', e); }
+    });
 
   } catch (err) {
     Logger.log('Errore fetchAndSaveData: ' + err.toString());
   }
 }
 
-// Wrapper per il trigger della "stazione" Studio (in realtà NAMain dello stesso device)
-function fetchAndSaveDataStudio() {
+/** Salva la rilevazione di una stazione dalla risposta Netatmo già scaricata, poi cache e dashboard. */
+function _salvaStazione(cfg, device) {
+  const props = PropertiesService.getScriptProperties();
+
+  // Source dei sensori: per STUDIO usa la base NAMain (device.dashboard_data),
+  // per ESTERNO usa il modulo NAModule1 (module.dashboard_data).
+  let sourceDash;
+  if (cfg.isMain) {
+    sourceDash = device.dashboard_data;
+    if (!sourceDash) { Logger.log('[' + cfg.key + '] NAMain dashboard_data assente'); return; }
+  } else {
+    const module = device.modules.find(m => m._id === cfg.moduleId);
+    if (!module) { Logger.log('[' + cfg.key + '] Modulo esterno non trovato.'); return; }
+    sourceDash = module.dashboard_data;
+    if (!sourceDash) { Logger.log('[' + cfg.key + '] NAModule1 dashboard_data assente'); return; }
+  }
+  const timestamp = new Date(sourceDash.time_utc * 1000);
+  const temp      = sourceDash.Temperature;
+  const hum       = sourceDash.Humidity;
+  const co2       = cfg.isMain && sourceDash.CO2 != null ? sourceDash.CO2 : null;
+
+  // Pioggia: solo per ESTERNO (NAMain non ha pluviometro). 0 anche se NAModule3 non presente/offline.
+  let rain = 0;
+  if (!cfg.isMain) {
+    const rainMod = device.modules.find(m => m.type === 'NAModule3');
+    if (rainMod && !cfg.rainModuleId) {
+      props.setProperty('RAIN_MODULE_ID', rainMod._id);
+      cfg.rainModuleId = rainMod._id;
+    }
+    rain = (rainMod && rainMod.dashboard_data)
+           ? (rainMod.dashboard_data.sum_rain_1 != null ? rainMod.dashboard_data.sum_rain_1
+              : rainMod.dashboard_data.Rain != null     ? rainMod.dashboard_data.Rain : 0)
+           : 0;
+    if (rainMod) {
+      const rd = rainMod.dashboard_data;
+      Logger.log('[' + cfg.key + '] NAModule3: ' + (rainMod.module_name || rainMod._id) +
+                 ' | sum_rain_1=' + (rd ? rd.sum_rain_1 : 'N/A') +
+                 ' | reachable=' + rainMod.reachable);
+    }
+  }
+
+  // Pressione: sempre da NAMain (anche per ESTERNO usa device.dashboard_data — è la stessa stazione)
+  const press = (device.dashboard_data && device.dashboard_data.Pressure != null)
+                ? device.dashboard_data.Pressure : null;
+
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = getOrCreateDataSheet(ss, cfg.dataSheetName);
+
+  // Salta se il dato è già presente (stesso minuto)
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    const lastTs = sheet.getRange(lastRow, 1).getValue();
+    if (lastTs instanceof Date && Math.abs(lastTs - timestamp) < 60000) {
+      Logger.log('[' + cfg.key + '] Dato già presente, skip.');
+      // ⚠️ Prima si usciva e basta: se la stazione non manda niente di nuovo per un po',
+      // la cache scadeva e il primo che apriva l'app si pagava la ricostruzione. Qui non
+      // c'è niente da ricalcolare, ma la cache va tenuta in piedi.
+      try { if (!_cacheRead(cfg.key)) _buildDataJson(cfg); } catch (e) { Logger.log('[' + cfg.key + '] cache non ricostruita: ' + e); }
+      return;
+    }
+  }
+
+  // Schema righe diverse: Studio 4 col (T/H/CO2), Esterno 5 col (T/H/Pioggia/Pressione)
+  if (cfg.isMain) {
+    sheet.appendRow([timestamp, temp, hum, co2]);
+    Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% CO2=' + co2 + 'ppm');
+  } else {
+    sheet.appendRow([timestamp, temp, hum, rain, press]);
+    Logger.log('[' + cfg.key + '] Salvato: ' + timestamp.toLocaleString('it-IT') + ' | T=' + temp + '°C H=' + hum + '% pioggia=' + rain + 'mm press=' + press + 'hPa');
+  }
+
+  // La cache JSON non si invalida qui: si RIGENERA in fondo, quando anche la pioggia
+  // giornaliera e la dashboard sono aggiornate (vedi nota a fine funzione).
+
+  // Aggiorna cache pioggia giornaliera (max 1 volta ogni 30 min) — solo Esterno ha NAModule3
+  if (!cfg.isMain) {
+    const rainMod2 = device.modules.find(m => m.type === 'NAModule3');
+    const rainModuleId = cfg.rainModuleId || (rainMod2 ? rainMod2._id : null);
+    // ⚠️ Qui c'era `token`, sparito il 22/09 col passaggio a netatmoFetch: ReferenceError a ogni
+    // salvataggio dell'Esterno, che saltava la cache precalcolata e la Dashboard (25/09/2026).
+    if (rainModuleId) updateRainDailyCacheIfNeeded(cfg.deviceId, rainModuleId, getValidToken(), cfg.rainCacheKey);
+  }
+
+  // Dashboard della stazione (Esterno e Studio). L'archiviazione mensile in Foglio1
+  // resta azione MANUALE da menu: niente getUi() nel percorso automatico dei trigger.
+  // Cache calda: il JSON che legge l'app lo prepara il trigger, non chi apre l'app. Sta
+  // PRIMA della dashboard apposta: se updateDashboard va in errore, il catch esterno
+  // salterebbe questa riga e l'app tornerebbe a pagarsi la ricostruzione. Se il precalcolo
+  // fallisce si invalida e basta: la richiesta successiva ricostruirà per conto suo.
+  const t0 = Date.now();
+  try {
+    _buildDataJson(cfg);
+  } catch (e) {
+    Logger.log('[' + cfg.key + '] Precalcolo cache JSON fallito: ' + e);
+    _cacheInvalidate(cfg.key);
+  }
+  Logger.log('[' + cfg.key + '] cache pronta in ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+
+  _aggiornaDashboardOgniTanto(cfg.key);
+}
+
+// Il foglio Dashboard lo guarda solo chi apre il foglio (l'app usa la cache), ma rifarlo costa:
+// rilegge TUTTE le righe della stazione (misurato il 25/09/2026: ~9 s l'Esterno, ~3 s Studio).
+// A ogni giro sarebbero ~25 minuti al giorno sui 90 che Google concede ai trigger di un account
+// gratuito: ogni 3 ore bastano, e il margine resta per i nuovi tentativi su Netatmo. Dal menu
+// «Aggiorna dashboard» si aggiorna subito, come prima. Il timbro si mette PRIMA: se la dashboard
+// va in errore non la si riprova a ogni giro, che costerebbe lo stesso tempo per niente.
+function _aggiornaDashboardOgniTanto(stationKey) {
+  const props  = PropertiesService.getScriptProperties();
+  const chiave = 'DASHBOARD_FATTA_' + stationKey;
+  if (Date.now() - parseInt(props.getProperty(chiave) || '0', 10) < 3 * 3600 * 1000) return;
+  props.setProperty(chiave, String(Date.now()));
+  const t0 = Date.now();
+  updateDashboard(stationKey);
+  Logger.log('[' + stationKey + '] dashboard rifatta in ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+}
+
+// Trigger di Studio: dal 25/09/2026 Studio lo salva il giro dell'Esterno (una sola chiamata a
+// Netatmo), quindi da trigger non fa niente. Dal menu «Aggiorna ora (Studio)» invece scarica e
+// salva subito, come prima: il menu non passa l'oggetto-evento, il trigger sì (con triggerUid).
+function fetchAndSaveDataStudio(e) {
+  if (e && e.triggerUid) return;
   fetchAndSaveData('STUDIO');
 }
 

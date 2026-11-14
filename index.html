@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🌡️ Stazione Meteo</title>
+  <title>Clima · Olio Galluzzi</title>
+  <meta name="description" content="Stazione meteo Netatmo dell'oliveto a Castelfidardo: dati in diretta, indicatori per il campo, storico dal 2020.">
+  <meta name="theme-color" content="#1e293b">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Clima">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     :root {
@@ -18,27 +27,24 @@
       --green:   #22c55e;
       --orange:  #f97316;
       --purple:  #a855f7;
+      --blue:    #60a5fa;   /* usato dal nowcast: prima non era definito e il colore cadeva nel vuoto */
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
 
-    /* ── HEADER ── */
-    .header {
-      background: var(--card);
-      border-bottom: 1px solid var(--border);
-      padding: 16px 24px;
-      display: flex;
-      align-items: center;
-      gap: 32px;
-      flex-wrap: wrap;
-    }
-    .header-title { font-size: 1rem; font-weight: 700; color: var(--accent); }
-    .live-block { display: flex; align-items: baseline; gap: 12px; }
-    .live-temp { font-size: 2.8rem; font-weight: 800; line-height: 1; }
-    .live-hum  { font-size: 1.4rem; font-weight: 600; color: var(--cold); }
-    .live-meta { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
-    .header-spacer { flex: 1; }
-    .update-badge { font-size: 0.72rem; color: var(--muted); text-align: right; }
+    /* ── HEADER (compatto: su un telefono deve stare in ~150 px) ── */
+    .header { background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 16px; }
+    .hdr-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .header-title { font-size: .95rem; font-weight: 700; color: var(--accent); white-space: nowrap; }
+    .hdr-brand { color: var(--muted); font-weight: 500; }
+    .hdr-ver { font-size: .62rem; font-weight: 400; color: var(--muted); margin-left: 4px; }
+    .hdr-main { display: flex; align-items: center; gap: 18px; margin-top: 6px; }
+    .live-temp { font-size: 2.6rem; font-weight: 800; line-height: 1; letter-spacing: -.02em; }
+    .hdr-side { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .live-hum  { font-size: 1.15rem; font-weight: 700; color: var(--cold); }
+    .live-meta { font-size: .74rem; color: var(--muted); }
+    .hdr-lines { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 2px 14px; }
+    @media (min-width: 700px) { .header { padding: 14px 24px; } .hdr-main { gap: 28px; } .live-temp { font-size: 3rem; } }
 
     /* ── NAV ── */
     .nav {
@@ -46,14 +52,17 @@
       border-bottom: 1px solid var(--border);
       display: flex;
       gap: 4px;
-      padding: 10px 24px;
+      padding: 10px 16px;
       overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
     }
+    .nav::-webkit-scrollbar { display: none; }
     .nav button {
       background: transparent;
       border: 1px solid var(--border);
       color: var(--muted);
-      padding: 7px 20px;
+      padding: 7px 14px;
       border-radius: 20px;
       cursor: pointer;
       font-size: 0.85rem;
@@ -76,6 +85,39 @@
     .chart-wrap.h340 { height: 340px; }
     .chart-wrap.h300 { height: 300px; }
     .chart-wrap.h420 { height: 420px; }
+    .chart-wrap.h200 { height: 200px; }   /* mancava: il grafico della pressione in Previsioni andava a misura di default */
+
+    /* ── AVVISO «stazione ferma» ── */
+    .banner { margin: 12px 16px 0; padding: 10px 14px; border-radius: 10px; background: rgba(239,68,68,.14); border: 1px solid rgba(239,68,68,.45); color: #fecaca; font-size: .85rem; line-height: 1.45; }
+    .banner b { color: #fff; }
+
+    /* ── OLIVETO: riga «oggi» + schede indicatore ── */
+    .oggi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+    .oggi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; }
+    .oggi-l { font-size: .62rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .oggi-v { font-size: 1.15rem; font-weight: 800; margin-top: 2px; white-space: nowrap; }
+    .oggi-s { font-size: .62rem; color: var(--muted); margin-top: 1px; }
+    .ind { display: grid; grid-template-columns: 40px 1fr; gap: 12px; align-items: start; }
+    .ind-ico { font-size: 1.7rem; line-height: 1; text-align: center; padding-top: 2px; }
+    .ind-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ind-title { font-size: .95rem; font-weight: 700; }
+    .lv { font-size: .66rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+    .lv-ok   { background: rgba(34,197,94,.15);  color: #86efac; border: 1px solid rgba(34,197,94,.4); }
+    .lv-att  { background: rgba(249,115,22,.15); color: #fdba74; border: 1px solid rgba(249,115,22,.45); }
+    .lv-all  { background: rgba(239,68,68,.18);  color: #fca5a5; border: 1px solid rgba(239,68,68,.5); }
+    .lv-info { background: rgba(148,163,184,.12); color: var(--muted); border: 1px solid var(--border); }
+    .ind-val { font-size: 1.5rem; font-weight: 800; margin: 5px 0 2px; line-height: 1.1; }
+    .ind-val small { font-size: .76rem; font-weight: 500; color: var(--muted); }
+    .ind-why { font-size: .84rem; color: #cbd5e1; line-height: 1.5; }
+    .ind-rows { margin-top: 8px; display: grid; gap: 4px; }
+    .ind-row { display: flex; justify-content: space-between; gap: 10px; font-size: .78rem; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 4px; }
+    .ind-row b { color: var(--text); font-weight: 600; text-align: right; }
+    .ind-src { margin-top: 8px; font-size: .66rem; color: #64748b; line-height: 1.4; }
+    .card.all { border-color: rgba(239,68,68,.55); }
+    .card.att { border-color: rgba(249,115,22,.5); }
+    .metodo summary { cursor: pointer; font-size: .85rem; color: var(--muted); font-weight: 600; }
+    .metodo-body { font-size: .8rem; color: var(--muted); line-height: 1.7; margin-top: 10px; }
+    .metodo-body b { color: var(--text); }
 
     /* ── STATS GRID ── */
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px; }
@@ -118,6 +160,7 @@
     .sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
     .sync-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .sync-red   { background: var(--hot);   box-shadow: 0 0 6px var(--hot); }
+    .sync-orange { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
 
     /* ── PERIOD PICKER ── */
     .period-picker { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
@@ -141,9 +184,12 @@
     .rain-bar-fg { height: 100%; border-radius: 4px; transition: width .5s; }
 
     @media (max-width: 600px) {
-      .header { padding: 12px 16px; gap: 16px; }
-      .live-temp { font-size: 2rem; }
       .section { padding: 12px; }
+      .card { padding: 16px 14px; margin-bottom: 14px; }
+      .nav { padding: 8px 12px; }
+      .nav button { padding: 7px 11px; font-size: .8rem; }
+      .chart-wrap.h420 { height: 340px; }
+      #station-picker { margin: 8px 12px 0 !important; }
     }
   </style>
 </head>
@@ -151,24 +197,24 @@
 
 <!-- ══ HEADER ══════════════════════════════════════════════════ -->
 <div class="header">
-  <div>
-    <div class="header-title">🌡️ Stazione Meteo <span style="font-size:0.65rem;font-weight:400;color:var(--muted);margin-left:6px">v17.20</span></div>
+  <div class="hdr-top">
+    <div class="header-title">🌡️ Clima <span class="hdr-brand">· Olio Galluzzi</span><span class="hdr-ver">v18.0</span></div>
     <div class="live-meta" id="hdr-sync" style="display:none"><span class="sync-dot" id="sync-dot"></span><span id="sync-text"></span></div>
   </div>
-  <div class="live-block">
+  <div class="hdr-main">
     <div class="live-temp" id="hdr-t">—</div>
-    <div>
-      <div class="live-meta" id="hdr-yesterday" style="display:none;font-weight:600"></div>
-      <div class="live-meta" id="hdr-minmax" style="display:none;font-weight:600"></div>
+    <div class="hdr-side">
       <div class="live-hum" id="hdr-h">— %</div>
       <div class="live-meta" id="hdr-press" style="color:var(--purple)"></div>
       <div class="live-meta" id="hdr-rain" style="color:var(--cold);display:none"></div>
       <div class="live-meta" id="hdr-co2" style="display:none"></div>
-      <div class="live-meta" id="hdr-ts"></div>
     </div>
   </div>
-  <div class="header-spacer"></div>
-  <div class="update-badge" id="hdr-update"></div>
+  <div class="hdr-lines">
+    <div class="live-meta" id="hdr-yesterday" style="display:none;font-weight:600"></div>
+    <div class="live-meta" id="hdr-minmax" style="display:none;font-weight:600"></div>
+    <div class="live-meta" id="hdr-ts"></div>
+  </div>
 </div>
 
 <!-- ══ SENSORE PICKER ════════════════════════════════════════ -->
@@ -180,17 +226,40 @@
 </div>
 
 <!-- ══ NAV ════════════════════════════════════════════════════ -->
-<div class="nav">
-  <button onclick="nav('panoramica',this)">Panoramica</button>
-  <button onclick="nav('anno',this)">Per Anno</button>
-  <button class="active" onclick="nav('periodo',this)">Periodo</button>
-  <button onclick="nav('previsioni',this)">Previsioni</button>
+<div class="nav" id="main-nav">
+  <button class="active" data-nav="oliveto" onclick="nav('oliveto',this)">Oliveto</button>
+  <button data-nav="periodo" onclick="nav('periodo',this)">Periodo</button>
+  <button data-nav="previsioni" onclick="nav('previsioni',this)">Previsioni</button>
+  <button data-nav="anno" onclick="nav('anno',this)">Per anno</button>
+  <button data-nav="panoramica" onclick="nav('panoramica',this)">Anni</button>
 </div>
 
 <!-- ══ LOADING ════════════════════════════════════════════════ -->
 <div id="loading" class="loading">
   <div class="loading-spinner"></div>
   Caricamento dati...
+</div>
+
+<!-- ══ AVVISO: stazione ferma (compare solo se l'ultimo dato ha più di un'ora) ══ -->
+<div id="banner-fermo" class="banner" style="display:none"></div>
+
+<!-- ══ OLIVETO — indicatori per chi lavora in campo ═══════════ -->
+<div id="s-oliveto" class="section">
+  <div class="oggi-grid" id="oliveto-oggi"></div>
+  <div id="oliveto-cards"></div>
+  <details class="card metodo">
+    <summary>Come si calcolano questi indicatori</summary>
+    <div class="metodo-body">
+      Tutto viene da due fonti: le <b>misure della stazione Netatmo</b> (ogni 10 minuti, qui alla sede) e le <b>previsioni Open-Meteo</b> per il punto esatto della stazione (43,457 N · 13,553 E). Niente è stimato a mano: se una fonte manca, la scheda lo dice.<br>
+      <b>Gelo</b> — la minima più bassa fra quella misurata stanotte e quelle previste per i prossimi 3 giorni. Sopra 3°: nessun rischio · 0-3°: brina possibile al suolo · sotto 0: gelata · sotto −3: danni a foglie, germogli e olive in pianta · sotto −7: anche rami e legno. Nelle conche e nelle zone basse fa 1-2° in meno della stazione.<br>
+      <b>Caldo</b> — la massima più alta fra oggi e i prossimi 3 giorni. 30-34°: la pianta consuma molta acqua · 35-37°: stress idrico e cascola · da 38°: stress forte. Lo stesso caldo ferma la mosca.<br>
+      <b>Pioggia e secco</b> — millimetri misurati dal pluviometro negli ultimi 7 e 30 giorni, il mese in corso contro la media dello stesso mese negli anni passati (storico dal 2020) e i giorni dall'ultima pioggia di almeno 2 mm. Sotto 10 mm in 30 giorni = secco; sotto 25 = poca pioggia; oltre 60 mm in 7 giorni = terreno saturo.<br>
+      <b>Mosca dell'olivo</b> — indicatore climatico, non conta le catture. Si guarda la settimana appena passata: medie fra 18 e 28° con aria umida (≥ 65%) = alto; stesse temperature con aria secca, oppure medie fra 16 e 18°, o sopra 28° = medio; medie sotto 16°, o almeno 3 giorni oltre i 33° (uova e larve muoiono) = basso.<br>
+      <b>Bagnatura e occhio di pavone</b> — ore nelle ultime 72 con le foglie bagnate, cioè pioggia nell'ultima ora oppure umidità ≥ 85% (la soglia classica è 90%, ma il nostro sensore esterno non supera l'85% nemmeno sotto la pioggia: per lui quello è aria satura), e temperatura in quelle ore: dalle 12 ore bagnate con 8-24° il fungo infetta; 6-12 ore = possibile; meno = chiome asciutte.<br>
+      <b>Finestra per i trattamenti</b> — ore di giorno (6-19) nelle prossime 48 h con probabilità di pioggia ≤ 20%, vento ≤ 12 km/h, raffiche ≤ 30, temperatura fra 5 e 28°. Una finestra è «buona» se dura almeno 4 ore e nelle 24 ore dopo sono previsti meno di 10 mm (altrimenti il prodotto si dilava).<br>
+      <b>Stazione</b> — pile e segnale dei moduli letti da Netatmo: sotto il 30% le pile sono in riserva, sotto il 15% vanno cambiate (2 ministilo AAA nel modulo esterno).
+    </div>
+  </details>
 </div>
 
 <!-- ══ PANORAMICA ════════════════════════════════════════════ -->
@@ -318,11 +387,11 @@
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Variazione pressione SLP — multi-finestra</div>
+      <div class="card-title">Variazione pressione — multi-finestra</div>
       <div id="prev-trend-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px"></div>
     </div>
     <div class="card" id="card-ecmwf">
-      <div class="card-title">📡 Previsione ECMWF — prossime 12 ore (Open-Meteo)</div>
+      <div class="card-title">📡 Prossime 12 ore — Open-Meteo</div>
       <div id="ecmwf-loading" style="color:var(--muted);font-size:0.82rem;padding:8px 0">Caricamento previsioni...</div>
       <div id="ecmwf-content" style="display:none">
         <div id="hourly-strip" style="display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px"></div>
@@ -330,7 +399,7 @@
       <div id="ecmwf-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Previsioni non disponibili (controlla la connessione).</div>
     </div>
     <div class="card" id="card-convective">
-      <div class="card-title">⛈️ Temporali convettivi — indici in quota (Open-Meteo / ECMWF)</div>
+      <div class="card-title">⛈️ Temporali convettivi — indici in quota (Open-Meteo)</div>
       <div id="conv-loading" style="color:var(--muted);font-size:0.82rem;padding:8px 0">Caricamento indici convettivi...</div>
       <div id="conv-content" style="display:none">
         <div class="stats-grid" id="conv-grid"></div>
@@ -345,7 +414,7 @@
       <div id="conv-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Dati convettivi non disponibili (controlla la connessione).</div>
     </div>
     <div class="card" id="card-daily10">
-      <div class="card-title">📅 Tendenza 10 giorni — modello ECMWF (Open-Meteo)</div>
+      <div class="card-title">📅 Tendenza 10 giorni — Open-Meteo</div>
       <div id="daily10-loading" style="color:var(--muted);font-size:0.82rem;padding:8px 0">Caricamento tendenza…</div>
       <div id="daily10-content" style="display:none">
         <div id="daily10-strip" style="display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px"></div>
@@ -357,7 +426,7 @@
       <div id="daily10-error" style="display:none;color:var(--muted);font-size:0.82rem;padding:8px 0">Tendenza a 10 giorni non disponibile (controlla la connessione).</div>
     </div>
     <div class="card">
-      <div class="card-title">Pressione SLP — ultime 12 ore (hPa)</div>
+      <div class="card-title">Pressione al livello del mare — ultime 12 ore (hPa)</div>
       <div class="chart-wrap h200"><canvas id="c-prev-press"></canvas></div>
     </div>
     <div class="card">
@@ -372,7 +441,7 @@
       </div>
       <div style="margin-top:12px;border-radius:8px;overflow:hidden;line-height:0">
         <iframe id="windy-frame"
-          src="https://embed.windy.com/embed2.html?lat=43.6&lon=13.5&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&detailLat=43.6&detailLon=13.5&width=650&height=450&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1"
+          src="https://embed.windy.com/embed2.html?lat=43.457&lon=13.553&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&detailLat=43.457&detailLon=13.553&width=650&height=450&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1"
           width="100%" height="450" frameborder="0" style="border-radius:8px">
         </iframe>
       </div>
@@ -382,14 +451,14 @@
       <div class="card-title">Come funziona la previsione</div>
       <div style="color:var(--muted);font-size:0.82rem;line-height:1.9">
         <b style="color:var(--text)">Nowcast locale:</b> previsione a breve termine basata su pressione SLP, tendenza barometrica, umidità e sensore pioggia Netatmo.<br>
-        <b style="color:var(--text)">Pressione SLP:</b> convertita a livello del mare dalla quota stazione (112 m s.l.m.). &gt;1020 hPa = alta · 1009–1020 = variabile · &lt;1009 = perturbato.<br>
+        <b style="color:var(--text)">Pressione:</b> la Netatmo la fornisce già riportata al livello del mare (fino alla v17 l'app la ricorreggeva per la quota e la mostrava ~13 hPa più alta del vero). &gt;1020 hPa = alta · 1009–1020 = variabile · &lt;1009 = perturbato.<br>
         <b style="color:var(--text)">Tendenza 3h:</b> &gt;+1.6 hPa = in aumento · &lt;−1.6 hPa = in calo · altrimenti stabile.<br>
         <b style="color:var(--text)">Alert automatici:</b> calo &gt;3 hPa/3h = peggioramento rapido · &gt;6 hPa/3h = venti forti · &gt;10 hPa/3h = tempesta.<br>
         <b style="color:var(--text)">Probabilità pioggia:</b> calcolata su 4 fattori — pressione assoluta, tendenza, umidità relativa, spread T–Td (punto di rugiada).<br>
         <b style="color:var(--text)">Base nubi stimata:</b> ogni 1°C di spread T–Td corrisponde a ~125 m di base delle nubi.<br>
         <b style="color:var(--text)">Temporali convettivi (Open-Meteo):</b> CAPE = energia convettiva disponibile (>300 J/kg = instabile, >1000 = forte, >2500 = estremo) · LI = indice di sollevamento (negativo = instabile) · CIN = inibizione convettiva (frena i temporali anche con CAPE alto).<br>
-        <b style="color:var(--text)">Tendenza 10 giorni (Open-Meteo/ECMWF):</b> i primi 3 giorni sono previsione attendibile; dal 4° al 10° è solo una tendenza orientativa (affidabilità in calo) — utile per farsi un'idea, non per decisioni certe.<br>
-        <span style="color:var(--accent)">Il nowcast usa solo dati Netatmo locali. Gli indici convettivi e la tendenza 10 giorni vengono dal modello ECMWF via Open-Meteo (gratuito, aggiornato ogni 15 min).</span>
+        <b style="color:var(--text)">Tendenza 10 giorni (Open-Meteo):</b> i primi 3 giorni sono previsione attendibile; dal 4° al 10° è solo una tendenza orientativa (affidabilità in calo) — utile per farsi un'idea, non per decisioni certe.<br>
+        <span style="color:var(--accent)">Il nowcast usa solo dati Netatmo locali. Previsioni, indici convettivi e tendenza 10 giorni vengono da Open-Meteo (gratuito, il modello migliore per il punto esatto della stazione, 43,457 N · 13,553 E; fino alla v17 si chiedevano per un punto in mare 16 km più a nord).</span>
       </div>
     </div>
   </div>
@@ -400,6 +469,40 @@
 // ║  CONFIG — inserisci l'URL del tuo Apps Script web app   ║
 // ╚══════════════════════════════════════════════════════════╝
 const API = 'https://script.google.com/macros/s/AKfycbzl8r8hzoZMs0n0gslLyIdYRN0Q3oF7CnjSqsIuFlycqSquisPJmsyoUQ8QFBzPQFYF/exec';
+
+// ── POSIZIONE ────────────────────────────────────────────────
+// La stazione sta alla sede (Via Monte Figuretta, Castelfidardo, ~110 m s.l.m.). Fino alla v17
+// le previsioni erano chieste per 43,6 N 13,5 E: un punto in mare davanti a Falconara, 16 km
+// più a nord, con temperature e instabilità da costa, non da collina.
+const LAT = 43.4574, LON = 13.5531;
+const ORA = 3600 * 1000;
+const dayKeyLocal = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const oraMin = ms => new Date(ms).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+// 'YYYY-MM-DDTHH:00' nell'ora italiana: la forma con cui Open-Meteo etichetta le ore
+function oraLocaleStr() { const s = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Rome' }); return s.slice(0, 10) + 'T' + s.slice(11, 13) + ':00'; }
+
+// ── OPEN-METEO: una sola chiamata per tutta l'app, tenuta buona 15 minuti ──────
+// La usano la scheda Oliveto e la tab Previsioni (prossime 12 ore, indici convettivi,
+// tendenza 10 giorni). Prima erano due chiamate separate per un punto sbagliato.
+let _meteo = null, _meteoTs = 0, _meteoInCorso = null;
+function meteo() {
+  if (_meteo && Date.now() - _meteoTs < 15 * 60 * 1000) return Promise.resolve(_meteo);
+  if (_meteoInCorso) return _meteoInCorso;
+  const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + LAT + '&longitude=' + LON +
+    '&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_gusts_10m,weather_code,cape,lifted_index,convective_inhibition' +
+    '&hourly=temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m' +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,et0_fao_evapotranspiration' +
+    '&forecast_days=10&timezone=Europe%2FRome';
+  const segnale = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(20000) : undefined;
+  _meteoInCorso = fetch(url, { signal: segnale }).then(async r => {
+    if (!r.ok) throw new Error('Open-Meteo ha risposto ' + r.status);
+    const j = await r.json();
+    if (!j.hourly || !j.daily) throw new Error('risposta Open-Meteo incompleta');
+    _meteo = j; _meteoTs = Date.now();
+    return j;
+  }).finally(() => { _meteoInCorso = null; });
+  return _meteoInCorso;
+}
 
 // ── COSTANTI ────────────────────────────────────────────────
 const MESI  = ['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
@@ -575,8 +678,6 @@ function init() {
     if (ph) ph.style.display = 'none';
   }
 
-  document.getElementById('s-periodo').classList.add('active');
-
   // Header
   if (D.attuale) {
     const t = D.attuale.t, h = D.attuale.h, ts = new Date(D.attuale.ts);
@@ -599,7 +700,11 @@ function init() {
     document.getElementById('hdr-t').textContent  = t.toFixed(1) + ' °C';
     document.getElementById('hdr-t').style.color =
       t >= 30 ? 'var(--hot)' : t <= 5 ? 'var(--cold)' : 'var(--text)';
-    document.getElementById('hdr-ts').textContent = ts.toLocaleString('it-IT');
+    // Due orari diversi, e si dicono entrambi: quello della MISURA e quello in cui il Mac ha
+    // pubblicato il file (prima c'era «Aggiornato: 14:38», che era l'ora del server, né l'una né l'altra)
+    document.getElementById('hdr-ts').textContent = 'Rilevazione ' +
+      ts.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) +
+      (D.pubblicato ? ' · pubblicata ' + oraMin(D.pubblicato) : (D.aggiornato ? ' · dal server ' + oraMin(D.aggiornato) : ''));
     // Temperatura di ieri alla stessa ora (riga dedicata sotto la temp)
     const elY = document.getElementById('hdr-yesterday');
     if (yOk) {
@@ -644,7 +749,8 @@ function init() {
       document.getElementById('hdr-press').style.display = '';
     }
     // Pioggia di oggi da giornaliero
-    const oggi = new Date().toISOString().slice(0, 10);
+    // data locale, non UTC: con toISOString() fra mezzanotte e l'una «oggi» era ancora ieri
+    const oggi = dayKeyLocal(new Date());
     const gOggi = (D.giornaliero || []).find(g => {
       const d = typeof g.data === 'number'
         ? new Date(g.data).toISOString().slice(0, 10)
@@ -657,32 +763,52 @@ function init() {
       elRain.style.display = '';
     }
   }
-  document.getElementById('hdr-update').textContent =
-    'Aggiornato: ' + new Date(D.aggiornato).toLocaleTimeString('it-IT');
-
   updateSyncStatus();
   buildYearSelector();        // prepara CY e i bottoni anno
-  setPeriod(1, document.querySelector('#period-presets .sel-btn[data-days="1"]'));
-  rendered['periodo'] = true;
+  // Tab di partenza: Oliveto per il sensore esterno; per lo Studio (interno) gli indicatori di
+  // campo non hanno senso, quindi il tab si nasconde e si parte dal Periodo.
+  const isStudio = currentStation === 'studio';
+  document.querySelector('#main-nav button[data-nav="oliveto"]').style.display = isStudio ? 'none' : '';
+  const start = isStudio ? 'periodo' : 'oliveto';
+  nav(start, document.querySelector('#main-nav button[data-nav="' + start + '"]'));
 }
 
 function updateSyncStatus() {
   const el  = document.getElementById('hdr-sync');
   const dot = document.getElementById('sync-dot');
   const txt = document.getElementById('sync-text');
+  const ban = document.getElementById('banner-fermo');
   el.style.display = '';
   if (!D || !D.attuale) {
     dot.className   = 'sync-dot sync-red';
     txt.textContent = 'Nessun dato live';
     return;
   }
-  // Trigger ogni 10 min + tolleranza Apps Script ~15 min → soglia 25 min
+  // La catena normale è: stazione ogni 10 min → trigger Google al minuto :x8 → il Mac pubblica
+  // ogni 10 min. Un dato di 25-30 minuti è quindi NORMALE (la vecchia soglia di 25 min faceva
+  // diventare rosso il pallino per qualche minuto a ogni giro). Oltre i 45 è in ritardo, oltre
+  // l'ora la stazione è ferma e lo si dice a chiare lettere, con l'ora dell'ultimo dato vero.
   const ageMin = (Date.now() - new Date(D.attuale.ts).getTime()) / 60000;
-  const ok = ageMin < 25;
-  dot.className   = 'sync-dot ' + (ok ? 'sync-green' : 'sync-red');
-  txt.textContent = ok
-    ? 'Sincronizzato (' + Math.round(ageMin) + ' min fa)'
-    : 'Non sincronizzato (' + Math.round(ageMin) + ' min fa)';
+  const quando = oraMin(D.attuale.ts);
+  if (ageMin < 45) {
+    dot.className = 'sync-dot sync-green';
+    txt.textContent = 'Dati delle ' + quando + ' (' + Math.round(ageMin) + ' min fa)';
+    ban.style.display = 'none';
+  } else if (ageMin < 60) {
+    dot.className = 'sync-dot sync-orange';
+    txt.textContent = 'In ritardo: dati delle ' + quando + ' (' + Math.round(ageMin) + ' min fa)';
+    ban.style.display = 'none';
+  } else {
+    dot.className = 'sync-dot sync-red';
+    const ore = ageMin / 60;
+    const quanto = ore < 48 ? Math.round(ore) + ' ore' : Math.round(ore / 24) + ' giorni';
+    txt.textContent = 'Stazione ferma: ultimo dato ' + quando + ' (' + quanto + ' fa)';
+    ban.style.display = '';
+    ban.innerHTML = '⚠️ <b>La stazione non manda dati dalle ' +
+      new Date(D.attuale.ts).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) +
+      '</b> (' + quanto + ' fa). Quello che vedi è l\'ultimo dato ricevuto, non quello di adesso. ' +
+      'Da controllare, in quest\'ordine: pile del modulo esterno, base Netatmo accesa e in wifi, trigger del foglio Google.';
+  }
 }
 
 // Aggiorna l'indicatore ogni minuto mentre la pagina è aperta
@@ -958,8 +1084,9 @@ async function setPeriod(days, btn) {
   const to   = new Date();
   const from = new Date();
   from.setDate(from.getDate() - (period24h ? 1 : days - 1));
-  document.getElementById('p-from').value = from.toISOString().slice(0, 10);
-  document.getElementById('p-to').value   = to.toISOString().slice(0, 10);
+  // date locali (con toISOString, cioè UTC, dopo le 23 d'inverno «oggi» diventava domani)
+  document.getElementById('p-from').value = dayKeyLocal(from);
+  document.getElementById('p-to').value   = dayKeyLocal(to);
 
   const avviso = document.getElementById('periodo-avviso');
   if (avviso) avviso.style.display = 'none';
@@ -1130,14 +1257,13 @@ function renderPeriodo() {
 // ══════════════════════════════════════════════════════════════
 // PREVISIONI — nowcast barometrico + umidità/Td
 // ══════════════════════════════════════════════════════════════
-const ELEVATION_M = 112; // quota stazione (m s.l.m.)
-
-function toSLP(pressHPa, tempC) {
-  return pressHPa * Math.pow(
-    1 - (0.0065 * ELEVATION_M) / (tempC + 0.0065 * ELEVATION_M + 273.15),
-    -5.257
-  );
-}
+// ⚠️ La pressione che salva il backend è `dashboard_data.Pressure` di Netatmo, che è GIÀ riportata
+// al livello del mare (quella assoluta è `AbsolutePressure`). Fino alla v17 qui si applicava una
+// seconda riduzione per i 112 m di quota: +13,5 hPa su ogni valore (14/11/2026: 1019,8 misurati
+// e 1033,4 a video, con Open-Meteo che dava 1020,6 al livello del mare). Le soglie del nowcast
+// («>1020 = alta», «<1009 = perturbato») ragionavano quindi su numeri gonfiati. Si tiene il nome
+// della funzione per non toccare i chiamanti: ora restituisce il valore così com'è.
+function toSLP(pressHPa) { return pressHPa; }
 
 function calcNowcast(fc) {
   const { isRaining, d1h, d3h, d6h, slpNow, humNow, spread, trend } = fc;
@@ -1303,7 +1429,7 @@ function renderPrevisioni() {
   const humColor   = fc.humNow > 80 ? 'var(--orange)' : 'var(--green)';
   const spreadColor = fc.spread < 2 ? 'var(--hot)' : fc.spread < 4 ? 'var(--orange)' : 'var(--muted)';
   const stats = [
-    { label:'Pressione SLP',    val: fc.slpNow + ' hPa',           color: slpColor },
+    { label:'Pressione',        val: fc.slpNow + ' hPa',           color: slpColor },
     { label:'Variazione 3h',    val: fc.tendencyLabel,              color: fc.tendencyColor },
     { label:'Prob. pioggia',    val: fc.rainProb + ' %',            color: rainColor },
     { label:'Umidità',          val: fc.humNow.toFixed(0) + ' %',   color: humColor },
@@ -1418,13 +1544,7 @@ async function fetchAndRenderConvective() {
   ecmwfErr.style.display  = 'none';
 
   try {
-    const url = 'https://api.open-meteo.com/v1/forecast' +
-      '?latitude=43.6&longitude=13.5' +
-      '&current=cape,lifted_index,convective_inhibition' +
-      '&hourly=precipitation_probability,weather_code,temperature_2m,precipitation' +
-      '&forecast_days=2&timezone=Europe%2FRome';
-    const res  = await fetch(url);
-    const data = await res.json();
+    const data = await meteo();   // stessa chiamata della scheda Oliveto, posizione della stazione
 
     const cape = data.current.cape              ?? 0;
     const li   = data.current.lifted_index      ?? 10;
@@ -1525,12 +1645,7 @@ async function fetchAndRenderDaily10() {
   const errEl  = document.getElementById('daily10-error');
   loadEl.style.display = ''; contEl.style.display = 'none'; errEl.style.display = 'none';
   try {
-    const url = 'https://api.open-meteo.com/v1/forecast' +
-      '?latitude=43.6&longitude=13.5' +
-      '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max' +
-      '&forecast_days=10&timezone=Europe%2FRome';
-    const res  = await fetch(url);
-    const data = await res.json();
+    const data = await meteo();
     const d = data.daily;
     if (!d || !d.time || !d.time.length) throw new Error('no daily');
 
@@ -1574,6 +1689,353 @@ async function fetchAndRenderDaily10() {
 // ══════════════════════════════════════════════════════════════
 // UTILITY
 // ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// OLIVETO — indicatori per chi lavora in campo
+// Gelo, caldo, pioggia/secco, mosca, bagnatura (occhio di pavone), finestra per i trattamenti,
+// stato della stazione. Tutto calcolato da misure vere (Netatmo) e previsioni (Open-Meteo):
+// niente è inventato, ogni scheda dice da dove viene il dato e di quando è. Le soglie sono quelle
+// agronomiche correnti e stanno scritte in chiaro nella scheda «Come si calcolano».
+// ══════════════════════════════════════════════════════════════
+const GG_IT = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
+const fmtG  = iso => { const d = new Date(iso + 'T12:00:00'); return GG_IT[d.getDay()] + ' ' + d.getDate(); };
+const fmtGM = iso => { const p = iso.split('-'); return p[2] + '/' + p[1]; };
+const f1 = v => v == null || isNaN(v) ? '—' : (Math.round(v * 10) / 10).toFixed(1).replace('.', ',');
+const f0 = v => v == null || isNaN(v) ? '—' : String(Math.round(v));
+
+// Quello che la stazione ha MISURATO: ultime 72 h a passo fitto, totali giornalieri, storico mensile.
+function misureOliveto() {
+  const now   = Date.now();
+  const oggiK = dayKeyLocal(new Date(now));
+  const g     = D.giornaliero || [];
+  const daK   = n => dayKeyLocal(new Date(now - (n - 1) * 864e5));
+  const g3 = g.filter(x => x.data >= daK(3)), g7 = g.filter(x => x.data >= daK(7)), g30 = g.filter(x => x.data >= daK(30));
+  const gOggi = g.find(x => x.data === oggiK) || null;
+  const somma = (arr, k) => arr.reduce((s, x) => s + (x[k] || 0), 0);
+  const media = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+
+  // minima della notte: dalle 18 di ieri alle 10 di oggi (o fino ad adesso, se è prima)
+  const d0 = new Date(now); d0.setHours(0, 0, 0, 0);
+  const inizioNotte = d0.getTime() - 6 * ORA, fineNotte = Math.min(now, d0.getTime() + 10 * ORA);
+  const notte = (D.raw || []).filter(r => r.ts >= inizioNotte && r.ts <= fineNotte && r.t != null);
+  const minNotte = notte.length ? Math.min(...notte.map(r => r.t)) : (gOggi ? gOggi.tMin : null);
+
+  // bagnatura: ore in cui le foglie sono bagnate nelle ultime 72 h, sommando gli intervalli fra
+  // una rilevazione e l'altra (10 min nelle ultime 48 h, 30 min prima; mai più di 1 h per buco).
+  // Bagnato = pioggia nell'ultima ora (`p` = mm dell'ultima ora) OPPURE umidità >= 85%.
+  // La soglia classica sarebbe 90%, ma QUESTO sensore non ci arriva: massimo 85% in 30 giorni
+  // (verificato il 14/11/2026, 14 giorni di pioggia compresi, 82-84% sotto l'acqua). Con il 90%
+  // avrebbe contato zero ore bagnate dopo 32 mm in tre giorni. L'85% è, per lui, aria satura.
+  const SOGLIA_UMIDITA_BAGNATO = 85;
+  const raw72 = (D.raw || []).filter(r => r.ts >= now - 72 * ORA);
+  let oreBagnate = 0; const tBagn = [];
+  for (let i = 1; i < raw72.length; i++) {
+    const dt = Math.min(raw72[i].ts - raw72[i - 1].ts, ORA);
+    if ((raw72[i].p || 0) > 0 || raw72[i].h >= SOGLIA_UMIDITA_BAGNATO) { oreBagnate += dt / ORA; tBagn.push(raw72[i].t); }
+  }
+
+  // ultima pioggia che conta (almeno 2 mm in un giorno)
+  let ultimaPioggia = null;
+  for (let i = g.length - 1; i >= 0; i--) if ((g[i].pioggia || 0) >= 2) { ultimaPioggia = g[i]; break; }
+  const giorniSenzaPioggia = ultimaPioggia
+    ? Math.round((d0.getTime() - new Date(ultimaPioggia.data + 'T00:00:00').getTime()) / 864e5)
+    : (g.length ? g.length : null);   // nessuna negli ultimi 30 gg: «almeno» quei giorni
+
+  // mese in corso contro la media dello stesso mese negli anni passati (storico Foglio1 dal 2020)
+  const anno = new Date(now).getFullYear(), mese = new Date(now).getMonth();
+  const gMese   = g.filter(x => x.data.slice(0, 7) === oggiK.slice(0, 7));
+  const storici = Object.keys(D.mensile || {}).map(Number).filter(y => y < anno)
+    .map(y => (D.mensile[y] && D.mensile[y][mese]) ? D.mensile[y][mese].pioggia : null)
+    .filter(v => v != null);
+
+  return {
+    gOggi, minNotte, maxOggi: gOggi ? gOggi.tMax : null,
+    tMedia7: media(g7.map(x => x.tMedia)), tMax7: g7.length ? Math.max(...g7.map(x => x.tMax)) : null,
+    hMedia7: media(g7.map(x => x.hMedia)),
+    giorniCaldi7: g7.filter(x => x.tMax >= 33).length, giorni30_7: g7.filter(x => x.tMax >= 30).length,
+    p3: somma(g3, 'pioggia'), p7: somma(g7, 'pioggia'), p30: somma(g30, 'pioggia'), pMese: somma(gMese, 'pioggia'),
+    mediaMese: media(storici), anniMese: storici.length,
+    ultimaPioggia, giorniSenzaPioggia,
+    oreBagnate, tBagnata: media(tBagn), n72: raw72.length,
+  };
+}
+
+// Quello che Open-Meteo PREVEDE per il punto della stazione: minime/massime a 3 giorni, pioggia,
+// e le finestre utili per trattare nelle prossime 48 ore.
+function previsioniOliveto(m) {
+  if (!m || !m.daily || !m.hourly) return null;
+  const d = m.daily, h = m.hourly;
+  let idx = h.time.indexOf(oraLocaleStr()); if (idx < 0) idx = 0;
+  const g3 = [0, 1, 2].filter(i => d.time[i] != null && d.temperature_2m_min[i] != null);
+  if (!g3.length) return null;
+  const tminMin = Math.min(...g3.map(i => d.temperature_2m_min[i]));
+  const tmaxMax = Math.max(...g3.map(i => d.temperature_2m_max[i]));
+  const iMin = g3.find(i => d.temperature_2m_min[i] === tminMin);
+  const iMax = g3.find(i => d.temperature_2m_max[i] === tmaxMax);
+  const mm3   = g3.reduce((s, i) => s + (d.precipitation_sum[i] || 0), 0);
+  const prob3 = Math.max(...g3.map(i => d.precipitation_probability_max[i] || 0));
+
+  // finestre: ore di giorno, senza pioggia prevista, vento debole, temperatura ragionevole
+  const N = Math.min(idx + 48, h.time.length);
+  const buona = i => {
+    const ora = +h.time[i].slice(11, 13);
+    return ora >= 6 && ora <= 18 &&
+      (h.precipitation_probability[i] ?? 100) <= 20 && (h.precipitation[i] || 0) <= 0.1 &&
+      (h.wind_speed_10m[i] ?? 99) <= 12 && (h.wind_gusts_10m[i] ?? 99) <= 30 &&
+      h.temperature_2m[i] != null && h.temperature_2m[i] >= 5 && h.temperature_2m[i] <= 28;
+  };
+  const finestre = [];
+  for (let i = idx; i < N; i++) {
+    if (!buona(i)) continue;
+    let j = i;
+    while (j + 1 < N && buona(j + 1) && h.time[j + 1].slice(0, 10) === h.time[i].slice(0, 10)) j++;
+    const ore = j - i + 1;
+    if (ore >= 3) {
+      let dopo = 0; for (let k = j + 1; k < Math.min(j + 25, h.time.length); k++) dopo += h.precipitation[k] || 0;
+      let ventoMax = 0; for (let k = i; k <= j; k++) ventoMax = Math.max(ventoMax, h.wind_speed_10m[k] || 0);
+      finestre.push({ giorno: h.time[i].slice(0, 10), da: +h.time[i].slice(11, 13), a: +h.time[j].slice(11, 13) + 1, ore, ventoMax, mmDopo: Math.round(dopo * 10) / 10 });
+    }
+    i = j;
+  }
+  return {
+    tminMin, giornoMin: d.time[iMin], tmaxMax, giornoMax: d.time[iMax], mm3, prob3,
+    ventoOra: h.wind_speed_10m[idx], raffOra: h.wind_gusts_10m[idx], finestre,
+    aggiornato: (m.current && m.current.time) ? m.current.time : h.time[idx],
+    giorni: g3.map(i => ({ g: d.time[i], min: d.temperature_2m_min[i], max: d.temperature_2m_max[i], mm: d.precipitation_sum[i], p: d.precipitation_probability_max[i], w: d.wind_speed_10m_max[i], et0: d.et0_fao_evapotranspiration[i] })),
+  };
+}
+
+// Stato della stazione (pile, segnale, ultimo contatto). Prima si prova il file che il Mac
+// potrebbe pubblicare accanto all'app (`stato-stazione.json`, se un giorno ci sarà), poi il
+// backend diretto: può metterci 30-45 s a svegliarsi, perciò non blocca nulla e ha un tetto.
+let statoStazione = null;
+async function caricaStatoStazione() {
+  if (statoStazione && Date.now() - statoStazione._letto < 10 * 60 * 1000) return statoStazione;
+  try {
+    const r = await fetch('stato-stazione.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.moduli && j.chiesto && Date.now() - new Date(j.chiesto).getTime() < 60 * 60 * 1000) {
+        statoStazione = Object.assign(j, { _letto: Date.now(), daFile: true });
+        return statoStazione;
+      }
+    }
+  } catch (_) { /* file assente: normale, si passa al backend */ }
+  const ctrl = new AbortController();
+  const stop = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(API + '?action=diagnostica', { signal: ctrl.signal });
+    const testo = await r.text();
+    if (r.ok && testo.trim().charAt(0) === '{') {
+      const j = JSON.parse(testo);
+      if (j && j.moduli) statoStazione = Object.assign(j, { _letto: Date.now() });
+    }
+  } finally { clearTimeout(stop); }
+  return statoStazione;
+}
+
+// Una scheda indicatore: icona, titolo, livello (ok/att/all/info), valore grande, perché, righe, fonte.
+function cardInd(o) {
+  const lv = o.livello || { cls: 'info', txt: '—' };
+  const rows = (o.rows || []).filter(r => r && r[1] != null && r[1] !== '')
+    .map(r => '<div class="ind-row"><span>' + r[0] + '</span><b>' + r[1] + '</b></div>').join('');
+  return '<div class="card ' + (lv.cls === 'all' ? 'all' : lv.cls === 'att' ? 'att' : '') + '"><div class="ind"><div class="ind-ico">' + o.ico + '</div><div>' +
+    '<div class="ind-head"><div class="ind-title">' + o.titolo + '</div><span class="lv lv-' + lv.cls + '">' + lv.txt + '</span></div>' +
+    (o.val != null ? '<div class="ind-val">' + o.val + (o.unit ? ' <small>' + o.unit + '</small>' : '') + '</div>' : '') +
+    '<div class="ind-why">' + (o.why || '') + '</div>' +
+    (rows ? '<div class="ind-rows">' + rows + '</div>' : '') +
+    (o.src ? '<div class="ind-src">' + o.src + '</div>' : '') +
+    '</div></div></div>';
+}
+
+async function renderOliveto() {
+  const box = document.getElementById('oliveto-cards');
+  if (!D || !D.attuale) { box.innerHTML = '<div class="empty">Nessun dato dalla stazione.</div>'; return; }
+  const mis = misureOliveto();
+  disegnaOliveto(mis, null, 'in arrivo…');          // prima le misure, subito
+  let prev = null, statoPrev = null;
+  try { prev = previsioniOliveto(await meteo()); if (!prev) statoPrev = 'non disponibile'; }
+  catch (e) { statoPrev = 'non disponibile (' + (e && e.message ? e.message : 'rete') + ')'; }
+  disegnaOliveto(mis, prev, statoPrev);               // poi le previsioni
+  caricaStatoStazione().then(() => disegnaOliveto(mis, prev, statoPrev)).catch(() => {});   // infine le pile
+}
+
+function disegnaOliveto(mis, prev, statoPrev) {
+  const srcNet  = 'Netatmo, rilevazione delle ' + oraMin(D.attuale.ts);
+  const srcOM   = prev ? 'Open-Meteo per il punto della stazione, aggiornato ' + prev.aggiornato.slice(11, 16) : null;
+  const srcBoth = srcNet + (srcOM ? ' · ' + srcOM : (statoPrev ? ' · previsione ' + statoPrev : ''));
+
+  // ── riga «oggi» ──
+  const oggi = [
+    ['Adesso',    f1(D.attuale.t) + '°', 'umidità ' + f0(D.attuale.h) + '%'],
+    ['Min notte', f1(mis.minNotte) + '°', 'max oggi ' + f1(mis.maxOggi) + '°'],
+    ['Pioggia',   f1(mis.gOggi ? mis.gOggi.pioggia : 0) + ' mm', 'oggi · 7 gg: ' + f0(mis.p7) + ' mm'],
+  ];
+  document.getElementById('oliveto-oggi').innerHTML = oggi.map(o =>
+    '<div class="oggi"><div class="oggi-l">' + o[0] + '</div><div class="oggi-v">' + o[1] + '</div><div class="oggi-s">' + o[2] + '</div></div>').join('');
+
+  const cards = [];
+
+  // ── GELO ──
+  {
+    const tmin = prev ? prev.tminMin : null;
+    const peggio = tmin == null ? mis.minNotte : (mis.minNotte == null ? tmin : Math.min(tmin, mis.minNotte));
+    let lv, why;
+    if (peggio == null)   { lv = { cls: 'info', txt: 'n.d.' };          why = 'Minime non disponibili.'; }
+    else if (peggio <= -7){ lv = { cls: 'all', txt: 'Gelata forte' };   why = 'Sotto i −7° soffrono anche rami e legno, non solo foglie e frutti.'; }
+    else if (peggio <= -3){ lv = { cls: 'all', txt: 'Gelata' };         why = 'Possibili danni a foglie, germogli e olive ancora in pianta, soprattutto se dura più ore.'; }
+    else if (peggio <= 0) { lv = { cls: 'att', txt: 'Gelo' };           why = 'Minime intorno allo zero: brina sulle chiome e nelle zone basse del campo, dove fa 1-2° in meno.'; }
+    else if (peggio <= 3) { lv = { cls: 'att', txt: 'Attenzione' };     why = 'Minime fra 0 e 3°: con cielo sereno e aria ferma si può arrivare a zero al suolo.'; }
+    else                  { lv = { cls: 'ok', txt: 'Nessun rischio' };  why = 'Minime sopra i 3°: niente gelate in vista.'; }
+    cards.push(cardInd({ ico: '❄️', titolo: 'Gelo', livello: lv,
+      val: prev ? f1(prev.tminMin) + '°' : f1(mis.minNotte) + '°',
+      unit: prev ? 'minima prevista, ' + fmtG(prev.giornoMin) : 'minima di stanotte',
+      why,
+      rows: [['Minima di stanotte (misurata)', f1(mis.minNotte) + ' °C'],
+             ...(prev ? prev.giorni.map(g => ['Minima ' + fmtG(g.g) + ' (prevista)', f1(g.min) + ' °C']) : [])],
+      src: srcBoth }));
+  }
+
+  // ── CALDO ──
+  {
+    const tmax = prev ? prev.tmaxMax : null;
+    const cand = [tmax, mis.maxOggi].filter(v => v != null);
+    const peggio = cand.length ? Math.max(...cand) : null;
+    let lv, why;
+    if (peggio == null)    { lv = { cls: 'info', txt: 'n.d.' };        why = 'Massime non disponibili.'; }
+    else if (peggio >= 38) { lv = { cls: 'all', txt: 'Caldo estremo' };why = 'Oltre i 38° la pianta chiude gli stomi e può perdere frutti (cascola): se si può, si irriga di notte. La mosca invece si ferma.'; }
+    else if (peggio >= 35) { lv = { cls: 'all', txt: 'Caldo forte' };  why = 'Dai 35° in su stress idrico e rischio cascola, soprattutto sui terreni asciutti. Le uova della mosca muoiono.'; }
+    else if (peggio >= 30) { lv = { cls: 'att', txt: 'Caldo' };        why = 'Sopra i 30° la pianta consuma molta acqua: controllare il terreno nei campi più asciutti.'; }
+    else                   { lv = { cls: 'ok', txt: 'Normale' };       why = 'Massime sotto i 30°: nessuno stress da caldo.'; }
+    cards.push(cardInd({ ico: '🔥', titolo: 'Caldo', livello: lv,
+      val: prev ? f1(prev.tmaxMax) + '°' : f1(mis.maxOggi) + '°',
+      unit: prev ? 'massima prevista, ' + fmtG(prev.giornoMax) : 'massima di oggi',
+      why,
+      rows: [['Massima di oggi (misurata)', f1(mis.maxOggi) + ' °C'],
+             ['Giorni sopra i 30° negli ultimi 7', String(mis.giorni30_7)],
+             ...(prev ? prev.giorni.map(g => ['Massima ' + fmtG(g.g) + ' (prevista)', f1(g.max) + ' °C']) : [])],
+      src: srcBoth }));
+  }
+
+  // ── PIOGGIA E SECCO ──
+  {
+    const nomeMese = MESI_F[new Date().getMonth()];
+    let lv, why;
+    if (mis.p30 < 10 && mis.giorniSenzaPioggia != null && mis.giorniSenzaPioggia >= 20) {
+      lv = { cls: 'all', txt: 'Secco' }; why = 'Meno di 10 mm in 30 giorni e niente pioggia da ' + mis.giorniSenzaPioggia + ' giorni: terreno asciutto anche in profondità.';
+    } else if (mis.p30 < 25 || (mis.giorniSenzaPioggia != null && mis.giorniSenzaPioggia >= 15)) {
+      lv = { cls: 'att', txt: 'Poca pioggia' }; why = 'Negli ultimi 30 giorni sono caduti ' + f1(mis.p30) + ' mm' + (mis.giorniSenzaPioggia != null ? ' e non piove da ' + mis.giorniSenzaPioggia + ' giorni' : '') + ': poca acqua, da tenere d\'occhio in estate.';
+    } else if (mis.p7 >= 60) {
+      lv = { cls: 'att', txt: 'Molta pioggia' }; why = f1(mis.p7) + ' mm in 7 giorni: terreno saturo, meglio non entrare con le macchine e occhio ai ristagni.';
+    } else {
+      lv = { cls: 'ok', txt: 'Regolare' }; why = 'Pioggia nella norma: ' + f1(mis.p30) + ' mm negli ultimi 30 giorni.';
+    }
+    const confronto = (mis.mediaMese != null && mis.anniMese)
+      ? ' <span style="font-weight:400;color:var(--muted)">(media ' + nomeMese.slice(0, 3).toLowerCase() + ' ' + (new Date().getFullYear() - mis.anniMese) + '-' + String(new Date().getFullYear() - 1).slice(2) + ': ' + f0(mis.mediaMese) + ' mm)</span>'
+      : '';
+    cards.push(cardInd({ ico: '🌧️', titolo: 'Pioggia e secco', livello: lv,
+      val: f1(mis.p30) + ' mm', unit: 'negli ultimi 30 giorni',
+      why,
+      rows: [['Ultimi 7 giorni', f1(mis.p7) + ' mm'],
+             ['Ultima pioggia (≥ 2 mm)', mis.ultimaPioggia ? fmtGM(mis.ultimaPioggia.data) + ' · ' + f1(mis.ultimaPioggia.pioggia) + ' mm' : 'nessuna negli ultimi 30 giorni'],
+             [nomeMese + ' finora', f1(mis.pMese) + ' mm' + confronto],
+             ...(prev ? [['Prossimi 3 giorni (previsti)', f1(prev.mm3) + ' mm · prob. max ' + f0(prev.prob3) + '%']] : [])],
+      src: srcBoth }));
+  }
+
+  // ── MOSCA DELL'OLIVO ──
+  {
+    const m = new Date().getMonth() + 1;
+    const stagione = m >= 6 && m <= 11;
+    let lv, why;
+    if (mis.tMedia7 == null)         { lv = { cls: 'info', txt: 'n.d.' }; why = 'Servono almeno un paio di giorni di misure.'; }
+    else if (mis.tMedia7 < 12)       { lv = { cls: 'ok', txt: 'Basso' };  why = 'Con medie sotto i 12° lo sviluppo della mosca è praticamente fermo.'; }
+    else if (mis.giorniCaldi7 >= 3)  { lv = { cls: 'ok', txt: 'Basso' };  why = mis.giorniCaldi7 + ' giorni oltre i 33° nell\'ultima settimana: il caldo uccide uova e larve dentro le olive.'; }
+    else if (mis.tMedia7 >= 18 && mis.tMedia7 <= 28) {
+      if (mis.hMedia7 != null && mis.hMedia7 >= 65) { lv = { cls: 'all', txt: 'Alto' };  why = 'Medie fra 18 e 28° e aria umida: condizioni ideali per ovideposizione e sviluppo delle larve.'; }
+      else                                           { lv = { cls: 'att', txt: 'Medio' }; why = 'Temperature favorevoli ma aria piuttosto secca: la mosca è attiva, un po\' meno che nelle annate umide.'; }
+    }
+    else if (mis.tMedia7 >= 16)      { lv = { cls: 'att', txt: 'Medio' }; why = 'Medie fra 16 e 18°: la mosca depone ancora, ma le larve si sviluppano piano.'; }
+    else if (mis.tMedia7 > 28)       { lv = { cls: 'att', txt: 'Medio' }; why = 'Molto caldo: gli adulti rallentano, ma bastano pochi giorni più freschi per ripartire.'; }
+    else                             { lv = { cls: 'ok', txt: 'Basso' };  why = 'Medie fra 12 e 16°: adulti poco attivi, ovideposizione scarsa.'; }
+    const nota = stagione
+      ? 'È un indicatore di clima, non di catture: la conferma la danno le trappole.'
+      : 'Fuori dal periodo con le olive in pianta (giugno-novembre) il dato serve poco.';
+    cards.push(cardInd({ ico: '🪰', titolo: 'Mosca dell\'olivo', livello: lv,
+      val: f1(mis.tMedia7) + '°', unit: 'media degli ultimi 7 giorni',
+      why: why + ' <span style="color:var(--muted)">' + nota + '</span>',
+      rows: [['Massima della settimana', f1(mis.tMax7) + ' °C'],
+             ['Giorni oltre i 33°', String(mis.giorniCaldi7)],
+             ['Umidità media', f0(mis.hMedia7) + ' %']],
+      src: srcNet }));
+  }
+
+  // ── BAGNATURA E OCCHIO DI PAVONE ──
+  {
+    const h = mis.oreBagnate, t = mis.tBagnata;
+    let lv, why;
+    if (mis.n72 < 10)                                   { lv = { cls: 'info', txt: 'n.d.' }; why = 'Poche rilevazioni nelle ultime 72 ore.'; }
+    else if (h >= 12 && t != null && t >= 8 && t <= 24) { lv = { cls: 'all', txt: 'Alto' };  why = 'Foglie bagnate a lungo con temperature miti: è così che si diffonde l\'occhio di pavone. Se si deve coprire col rame, è il momento di pensarci.'; }
+    else if (h >= 6)                                    { lv = { cls: 'att', txt: 'Medio' }; why = 'Qualche ora di bagnatura: l\'infezione è possibile se continua a piovere o resta la nebbia.'; }
+    else                                                { lv = { cls: 'ok', txt: 'Basso' };  why = 'Chiome asciutte: il fungo non germina senza acqua sulle foglie.'; }
+    cards.push(cardInd({ ico: '💧', titolo: 'Bagnatura e occhio di pavone', livello: lv,
+      val: f1(h) + ' h', unit: 'di foglie bagnate nelle ultime 72 ore',
+      why,
+      rows: [['Temperatura nelle ore bagnate', t != null ? f1(t) + ' °C' : '—'],
+             ['Pioggia ultimi 3 giorni', f1(mis.p3) + ' mm'],
+             ['Umidità adesso', f0(D.attuale.h) + ' %']],
+      src: srcNet }));
+  }
+
+  // ── FINESTRA PER I TRATTAMENTI ──
+  {
+    let lv, why, val = null, unit = '', rows = [];
+    if (!prev) {
+      lv = { cls: 'info', txt: statoPrev || 'n.d.' }; why = 'Serve la previsione oraria di vento e pioggia.';
+    } else {
+      const buone = prev.finestre.filter(f => f.ore >= 4 && f.mmDopo < 10);
+      if (buone.length) {
+        const f = buone[0];
+        lv = { cls: 'ok', txt: 'Finestra buona' }; val = fmtG(f.giorno) + ' ' + f.da + '-' + f.a; unit = 'ore senza pioggia e con vento debole';
+        why = 'Vento fino a ' + f0(f.ventoMax) + ' km/h e ' + (f.mmDopo > 0 ? 'solo ' + f1(f.mmDopo) + ' mm' : 'niente pioggia') + ' nelle 24 ore dopo: il prodotto resta sulla pianta.';
+      } else if (prev.finestre.length) {
+        const f = prev.finestre[0];
+        lv = { cls: 'att', txt: 'Finestra corta' }; val = fmtG(f.giorno) + ' ' + f.da + '-' + f.a;
+        unit = f.mmDopo >= 10 ? 'poi ' + f1(f.mmDopo) + ' mm: rischio dilavamento' : 'solo ' + f.ore + ' ore';
+        why = 'Si può fare, ma con poco margine.';
+      } else {
+        lv = { cls: 'att', txt: 'Nessuna finestra' }; val = '48 h'; unit = 'con vento o pioggia';
+        why = 'Nelle prossime 48 ore non c\'è un tratto di giorno con vento sotto i 12 km/h e senza pioggia.';
+      }
+      rows = [['Vento adesso', f0(prev.ventoOra) + ' km/h, raffiche ' + f0(prev.raffOra)],
+              ...prev.finestre.slice(0, 3).map(f => ['Finestra ' + fmtG(f.giorno), f.da + '-' + f.a + ' · vento ≤ ' + f0(f.ventoMax) + ' km/h · dopo ' + f1(f.mmDopo) + ' mm'])];
+    }
+    cards.push(cardInd({ ico: '🚜', titolo: 'Finestra per i trattamenti', livello: lv, val, unit, why, rows, src: srcOM || '' }));
+  }
+
+  // ── STAZIONE (pile e segnale) ──
+  let stazione = null, stazioneGrave = false;
+  if (statoStazione && statoStazione.moduli) {
+    const est = statoStazione.moduli.find(x => x.tipo === 'NAModule1');
+    const plu = statoStazione.moduli.find(x => x.tipo === 'NAModule3');
+    const b = est ? est.batteria : null;
+    let lv, why;
+    if (b == null)     { lv = { cls: 'info', txt: 'n.d.' };          why = 'Batteria del modulo esterno non letta.'; }
+    else if (b <= 15)  { lv = { cls: 'all', txt: 'Pile scariche' };  why = 'Il modulo esterno è al ' + b + '%: cambiare le 2 ministilo AAA prima che smetta di trasmettere (già ora salta qualche rilevazione).'; stazioneGrave = true; }
+    else if (b <= 30)  { lv = { cls: 'att', txt: 'Pile in riserva' };why = 'Modulo esterno al ' + b + '%: tenere pronte 2 ministilo AAA.'; }
+    else               { lv = { cls: 'ok', txt: 'A posto' };         why = 'Pile e segnale nella norma.'; }
+    const seg = s => s == null ? '—' : s + (s < 60 ? ' (buono)' : s < 75 ? ' (discreto)' : ' (debole)');
+    stazione = cardInd({ ico: '📡', titolo: 'Stazione Netatmo', livello: lv,
+      val: b != null ? b + '%' : null, unit: 'pile del modulo esterno', why,
+      rows: [['Pile del pluviometro', plu && plu.batteria != null ? plu.batteria + '%' : '—'],
+             ['Segnale radio del modulo esterno', est ? seg(est.segnale) : '—'],
+             ...statoStazione.moduli.map(x => ['Ultimo contatto ' + x.nome, x.fermoDaMin == null ? '—' : x.fermoDaMin + ' min fa'])],
+      src: 'Netatmo, letto alle ' + oraMin(new Date(statoStazione.chiesto).getTime()) + (statoStazione.daFile ? ' (file pubblicato dal Mac)' : ' (chiesto adesso al backend)') });
+  }
+  if (stazione) { if (stazioneGrave) cards.unshift(stazione); else cards.push(stazione); }
+
+  document.getElementById('oliveto-cards').innerHTML = cards.join('');
+}
+
 function mkChart(id, type, data, options) {
   if (charts[id]) charts[id].destroy();
   charts[id] = new Chart(document.getElementById(id), { type, data, options });
@@ -1583,12 +2045,13 @@ function nav(name, btn) {
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
   document.getElementById('s-'+name).classList.add('active');
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
   // render lazy: solo la prima volta che la sezione diventa visibile
   if (!rendered[name]) {
-    if      (name === 'panoramica')  renderPanoramica();
+    if      (name === 'oliveto')     renderOliveto();
+    else if (name === 'panoramica')  renderPanoramica();
     else if (name === 'anno')        renderAnno();
-    else if (name === 'periodo')     setPeriod(3, document.querySelector('#period-presets .sel-btn[data-days="3"]'));
+    else if (name === 'periodo')     setPeriod(1, document.querySelector('#period-presets .sel-btn[data-days="1"]'));
     else if (name === 'previsioni')  renderPrevisioni();
     rendered[name] = true;
   }
@@ -1598,9 +2061,9 @@ function setWindyLayer(layer, btn) {
   document.querySelectorAll('#windy-btns .sel-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const f = document.getElementById('windy-frame');
-  f.src = 'https://embed.windy.com/embed2.html?lat=43.6&lon=13.5&zoom=8&level=surface&overlay=' + layer +
+  f.src = 'https://embed.windy.com/embed2.html?lat=' + LAT.toFixed(3) + '&lon=' + LON.toFixed(3) + '&zoom=8&level=surface&overlay=' + layer +
     '&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates' +
-    '&detail=&detailLat=43.6&detailLon=13.5&width=650&height=450&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1';
+    '&detail=&detailLat=' + LAT.toFixed(3) + '&detailLon=' + LON.toFixed(3) + '&width=650&height=450&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1';
 }
 
 // ── START ─────────────────────────────────────────────────────
